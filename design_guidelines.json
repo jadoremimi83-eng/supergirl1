@@ -1,0 +1,175 @@
+{
+  "app_name": "SUPER GIRL",
+  "personality": "6 Glass / Luxe DARK",
+  "personality_one_liner": "A cinematic, premium CRM experience that feels like a luxury aesthetic brand rather than a clinical software tool.",
+  "color": {
+    "surface": "#0A0A0A",
+    "onSurface": "#F4F0E6",
+    "surfaceSecondary": "#141414",
+    "onSurfaceSecondary": "#D1CAB8",
+    "surfaceTertiary": "#1F1E1C",
+    "onSurfaceTertiary": "#AFA898",
+    "surfaceInverse": "#F4F0E6",
+    "onSurfaceInverse": "#0A0A0A",
+    "brand": "#D4AF37",
+    "brandPrimary": "#D4AF37",
+    "onBrandPrimary": "#0A0A0A",
+    "brandSecondary": "#B68D40",
+    "onBrandSecondary": "#F4F0E6",
+    "brandTertiary": "#2E2412",
+    "onBrandTertiary": "#EBD399",
+    "success": "#193325",
+    "onSuccess": "#7FC99E",
+    "warning": "#4A3311",
+    "onWarning": "#DFAF70",
+    "error": "#47141A",
+    "onError": "#E07B88",
+    "info": "#262523",
+    "onInfo": "#9E9A90",
+    "border": "#262523",
+    "borderStrong": "#4A3E22",
+    "divider": "#1A1918"
+  },
+  "typography": {
+    "displayFontFamily": "Cormorant Garamond",
+    "textFontFamily": "Satoshi",
+    "scale": {
+      "sm": 12,
+      "base": 14,
+      "lg": 16,
+      "xl": 20,
+      "2xl": 24
+    }
+  },
+  "spacing": {
+    "rule": "Generous spacing. Allow the UI to breathe. Do not cramp content. Use glassmorphism to separate overlapping elements instead of borders where possible.",
+    "xs": 4,
+    "sm": 8,
+    "md": 12,
+    "lg": 16,
+    "xl": 24,
+    "2xl": 32,
+    "3xl": 48
+  },
+  "radius_tokens": {
+    "sm": 6,
+    "md": 12,
+    "lg": 20,
+    "pill": 999
+  },
+  "shadow_tier": 0,
+  "navigation": "bottom_tabs",
+  "icon_set": "Feather",
+  "glassmorphism": {
+    "enabled": true,
+    "do's": [
+      "Use on sticky headers over scrolling content",
+      "Use on the bottom tab bar",
+      "Use on floating action buttons (FAB)",
+      "Use on 'Featured' or 'Priority' cards like the 'DA FISSARE ADESSO' section"
+    ],
+    "dont's": [
+      "Do not apply to form fields or body text regions",
+      "Do not overdo it. Keep to 1-2 glass surfaces per screen max"
+    ]
+  },
+  "platform_libraries": {
+    "glass": {
+      "ios": "expo-glass-effect",
+      "android": "expo-blur",
+      "low_end_android_fallback": "solid surfaceSecondary"
+    },
+    "image": "expo-image",
+    "blur": "expo-blur",
+    "bottom_sheet": "@gorhom/bottom-sheet",
+    "animation": "react-native-reanimated",
+    "gesture": "react-native-gesture-handler"
+  },
+  "screens": [
+    {
+      "name": "Home",
+      "purpose": "Dashboard highlighting operational priorities like 'DA FISSARE ADESSO'.",
+      "states": {
+        "loading": "Centered spinner matching brandPrimary",
+        "empty": "No immediate tasks. 'Tutto sotto controllo.'",
+        "error": "Error loading metrics with retry."
+      },
+      "layout": "Hero section showing total leads and quick status. Below, a critical glassmorphic card for 'DA FISSARE ADESSO' containing urgent leads that require appointment scheduling."
+    },
+    {
+      "name": "Chat",
+      "purpose": "WhatsApp-like messaging interface optimized for one-handed use, with an AI vs Operator toggle.",
+      "states": {
+        "loading": "Skeleton loaders for chat rows.",
+        "empty": "Illustration of a quiet inbox with a prompt.",
+        "error": "Message sync failed."
+      },
+      "layout": "List view of active chats. Inside a chat: large, easy-to-reach multimodal input bar at the bottom. A sticky floating glass toggle at the top or bottom for AI/Operator mode. A prominent 'PRENDI CONVERSAZIONE' or 'RIATTIVA AI' primary CTA dynamically visible when needed."
+    },
+    {
+      "name": "Clienti",
+      "purpose": "Searchable list of clients with a detailed view containing the AI-generated summary.",
+      "states": {
+        "loading": "Skeleton list.",
+        "empty": "No clients found. Search again.",
+        "error": "Failed to load clients."
+      },
+      "layout": "Search bar at top. Client list below. On tap: opens a detail sheet/screen featuring a tinted icon container for initials (or photo), lead temperature badge, and a beautifully formatted AI Summary text block."
+    },
+    {
+      "name": "Pipeline",
+      "purpose": "Visual board tracking leads across 8 stages, emphasizing the 'DA FISSARE APPUNTAMENTO' column.",
+      "states": {
+        "loading": "Loading skeleton of stages.",
+        "empty": "No active leads in pipeline.",
+        "error": "Unable to fetch pipeline."
+      },
+      "layout": "Vertical-stack or collapsible-section Kanban layout (better for mobile). The 'DA FISSARE' stage should stand out visually (e.g., using a brand-tinted glass background or stronger border). Include a persistent 'Cambia Stato' button on lead cards."
+    },
+    {
+      "name": "Analytics",
+      "purpose": "Dashboard for performance metrics, conversion rates, and campaign tracking.",
+      "states": {
+        "loading": "Metric skeletons.",
+        "empty": "Not enough data.",
+        "error": "Error loading charts."
+      },
+      "layout": "Grid of KPI cards (2-col where appropriate), clear typography for numbers, and a pinned filter row for periods/campaigns."
+    },
+    {
+      "name": "Altro",
+      "purpose": "Menu for Settings, Services, Clinics (Sedi), Campaigns, Team, AI Knowledge Base, and Integrations.",
+      "states": {
+        "loading": "None",
+        "empty": "None",
+        "error": "None"
+      },
+      "layout": "Clean, list-based navigation menu with Feather icons for each row."
+    }
+  ],
+  "images": {
+    "hero_background": {
+      "url": "https://images.unsplash.com/photo-1693578538512-fc66f318c833?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2OTV8MHwxfHNlYXJjaHwxfHxzcGElMjBpbnRlcmlvcnxlbnwwfHx8fDE3ODcyMzM2MTF8MA&ixlib=rb-4.1.0&q=85",
+      "alt": "Luxury spa interior"
+    },
+    "chat_empty_state": {
+      "url": "https://images.pexels.com/photos/10477231/pexels-photo-10477231.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+      "alt": "Clean champagne textured background for empty chat state"
+    }
+  },
+  "instructions_to_main_agent": [
+    "Do NOT use any emojis for the lead temperatures (Molto Calda, Interessata, etc.) in the UI. Map them to semantic background/text colors in the JSON: Molto Calda -> error (Ruby), Interessata -> warning (Amber), Da Coltivare -> success (Sage), Non Qualificata -> info (Grey). Render them as elegant text badges or pills.",
+    "The UI is completely Italian, so ensure all hardcoded text (empty states, buttons) remains in Italian.",
+    "Implement a Dark-first Luxe aesthetic. Use deep blacks (surface/surfaceSecondary) rather than pure black everywhere. Text should be off-white (Ivory) with Champagne Gold as the primary action and highlight color.",
+    "Pipeline Screen: Since it's mobile, avoid a pure horizontal scrolling Kanban if it becomes too dense. Implement a vertical list of collapsible stages, or at least highly optimized cards. Make the 'DA FISSARE APPUNTAMENTO' stage visually distinct using the `brandTertiary` background.",
+    "Chat Screen: Must be one-handed friendly. Keep the primary AI toggle or 'PRENDI CONVERSAZIONE' button pinned at the bottom area just above the input, or in a highly accessible floating glass container.",
+    "Apply gradient-to-dark scrims (Layer 0 image, Layer 1 linear gradient, Layer 2 text) when rendering text over any background image, such as the Home hero."
+  ],
+  "haptics": {
+    "primary_button_press": "impactLight",
+    "tab_change": "selection",
+    "lead_status_change": "impactMedium",
+    "ai_operator_toggle": "impactMedium",
+    "chat_send": "impactLight"
+  }
+}

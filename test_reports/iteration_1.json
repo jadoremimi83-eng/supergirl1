@@ -1,0 +1,39 @@
+{
+  "summary": "Full backend + frontend testing of SUPER GIRL Fase 1 Demo. 27/27 backend pytest cases pass on public preview URL, covering auth (admin/operator/wrong password/me), seed (13 leads, 8 pipeline stages, services/locations/campaigns/team/KB), conversations list/filters/detail, AI qualify (no handoff), AI handoff core flow (verifies handoff=true, motivo=prenotazione, new_status=da_fissare, structured summary, lead moved to da_fissare, ai_attiva=false, cliente_da_fissare notification created), take/reactivate, operator messages, leads search/patch/status-change with history+notif, home priorities (foto_profilo/ig_username/piattaforma present), analytics with filters + by_campaign, campaigns lead_count, integrations non_attivo, RBAC (operator 403 on services/locations POST). Frontend (mobile 390x844): quick-admin login → priorities landing shows 'DA FISSARE ADESSO' with cards, go-dashboard-button routes to Chat tab, 13 conversation rows visible, opening a conversation renders correctly with RIATTIVA AI/PRENDI toggle logic working, Simula cliente/Simula AI buttons present, bottom tabs Chat/Clienti/Pipeline/Analytics/Altro all load, Pipeline shows DA FISSARE column, Analytics and Clienti screens render, Altro shows sezioni + Esci (logout). All core functionality verified. Only a minor React Native web deprecation console warning noted (props.pointerEvents).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": [
+      {"component": "pointerEvents prop", "issue": "Console warning: 'props.pointerEvents is deprecated. Use style.pointerEvents' emitted on Chat/Conversation screens. Likely from a Pressable/View using pointerEvents as prop instead of style.pointerEvents in RN Web. Non-blocking but should be migrated."}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/conftest.py",
+    "/app/backend/tests/test_supergirl_api.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Migrate any `<View pointerEvents=...>` / `<Pressable pointerEvents=...>` usages to `style={{ pointerEvents: ... }}` to silence the RN Web deprecation warning."
+  ],
+  "critical_code_review_comments": [
+    "server.py is 965 lines — consider splitting into routers/ (auth, conversations, leads, pipeline, analytics, altro, notifications) for maintainability before Fase 2.",
+    "analytics endpoint uses an O(N) awaited query per lead (nested await inside comprehension around messages count) — acceptable for 13 seed leads but must be refactored with aggregation pipeline before real traffic.",
+    "Conversations/messages endpoints do not enforce operator/admin scoping beyond authentication — fine for Fase 1 demo but noted for future phases.",
+    "No rate limiting / no explicit CORS whitelist (allow_origins=['*']) — expected for Fase 1 demo but should be tightened later."
+  ],
+  "updated_files": [
+    "/app/backend/tests/conftest.py (new)",
+    "/app/backend/tests/test_supergirl_api.py (new)"
+  ],
+  "success_rate": {"backend": "100% (27/27)", "frontend": "100% (all critical UI flows verified)"},
+  "seed_data_creation": "No manual seed created; app seeds automatically on startup. Tests use existing 13 seeded leads and their conversations. Test-created data (services/notes) is deleted or prefixed with TEST_.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Backend pytest suite lives in /app/backend/tests/test_supergirl_api.py and uses /app/frontend/.env EXPO_PUBLIC_BACKEND_URL. Uses -n 2 loadscope; TestAIQualify picks last ai_attiva conv, TestAIHandoff picks middle one, TestTakeReactivate picks first to avoid races. Handoff test consumes an AI-active conversation (moves lead to da_fissare) — this is idempotent-safe as long as at least one ai_attiva conv remains. If DB is fully seeded this always holds. Frontend testIDs coverage: login-*, quick-admin, quick-operator, go-dashboard-button, priority-card-*, conversation-row-*, take-conversation-button, reactivate-ai-button, sim-customer-button, sim-ai-button, sim-customer-input, sim-send, conv-back, conv-banner, message-input, send-message-button.",
+  "rca_of_issue": "N/A — no bugs found; the initial handoff test failure during the first pytest run was a race condition in my own test (two parallel workers picking conv[0]); fixed by having qualify use last, handoff use middle, take/reactivate use first AI-active conversation."
+}
