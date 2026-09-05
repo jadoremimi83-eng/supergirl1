@@ -1,0 +1,38 @@
+{
+  "summary": "Fase 2 (Meta Lead Ads predisposizione) tested. Backend: 15/16 pytest cases pass. All GET/POST webhook, status (admin/operator), integrations flag, simulate full flow (lead nuovo_lead + origine=meta + ai_attiva conv + AI greeting + notification nuova_chat + campagna/inserzione auto-associata + presenza in /leads?stato=nuovo_lead e in /pipeline nuovo_lead), RBAC operator 403, Fase 1 regression (login admin/operator, home/priorities, AI handoff prenotazione → da_fissare, analytics) all PASS. 1 REAL BACKEND BUG found: idempotency su leadgen_id non funziona nell'endpoint /api/integrations/meta/simulate perché il modello Pydantic SimLeadInput non dichiara il campo leadgen_id, quindi FastAPI/Pydantic lo scarta dal body e ingest_meta_lead riceve leadgen_id=None → un secondo POST con stesso leadgen_id crea un nuovo lead invece di restituire duplicate:true (verificato anche via curl diretto). Frontend (mobile 390x844, admin): login → priorities → go-dashboard → Altro tab → Integrazioni → card integration-meta apre schermata Meta Lead Ads, che mostra Stato integrazione + Callback URL + Verify Token + guida + Simulatore. Riempimento nome 'TEST_FrontendMarta' + tap su simulate-meta-lead-button → naviga a /conversation/<id> con il messaggio AI iniziale che include il nome del lead e 'SUPER GIRL' ✅. RBAC UI operator (nessun Simulatore) verificata via codice: meta.tsx line 139 `{isAdmin && (...)}` guarda l'intera sezione Simulatore + il rendering condizionale del Verify Token line 118 `{isAdmin && status.verify_token ? ...}`. Backend conferma operatore riceve verify_token=null e 403 su POST simulate.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "POST /api/integrations/meta/simulate", "issue": "Idempotenza rotta: SimLeadInput (server.py:1118-1131) non ha il campo leadgen_id, quindi Pydantic lo elimina dal body e ingest_meta_lead riceve leadgen_id=None. Due POST con lo stesso leadgen_id creano due lead distinti (duplicate:false). Fix: aggiungere `leadgen_id: Optional[str] = None` a SimLeadInput.", "priority": "HIGH"}
+    ],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_meta_fase2.py",
+    "/app/backend/tests/test_supergirl_api.py",
+    "/app/test_reports/pytest/pytest_meta_fase2.xml"
+  ],
+  "action_items": [
+    "Aggiungere `leadgen_id: Optional[str] = None` (e opzionalmente `ad_id`, `form_id`, `campaign_id`) al modello SimLeadInput in /app/backend/server.py:1118 così che la chiamata /api/integrations/meta/simulate rispetti l'idempotenza richiesta dalla review. Nessun altro cambiamento richiesto — ingest_meta_lead già gestisce correttamente leadgen_id."
+  ],
+  "critical_code_review_comments": [
+    "server.py ora è 1195 righe: da splittare (auth, conversations, leads, pipeline, analytics, altro, notifications, integrations/meta) prima della Fase 3.",
+    "meta_webhook (server.py:1076) chiama retrieve_and_ingest in-line sull'event-loop del webhook: quando Meta sarà reale, spostare in un BackgroundTask/queue per rispettare i 5s di timeout richiesti da Meta e per gestire retry/idempotenza a livello di infra.",
+    "ingest_meta_lead crea sempre un followup 'Follow-up 1 · 2 ore' hard-coded (server.py:1010-1014): parametrizzare quando in Fase 3 arriveranno i workflow WhatsApp reali.",
+    "Il verify token demo è committato in memory/test_credentials context ma non appare in /app/backend/.env — assicurarsi che META_VERIFY_TOKEN sia effettivamente settato nell'env di produzione, altrimenti la verifica webhook Meta fallirà silenziosamente (attualmente funziona in preview perché settato)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_meta_fase2.py (new)"
+  ],
+  "success_rate": {"backend": "94% (15/16 — 1 real bug: idempotency)", "frontend": "100% (admin end-to-end verified; operator gating verified via code + backend RBAC 403)"},
+  "seed_data_creation": "Test data created via simulate/ingestion (TEST_Marta, TEST_Idempo, TEST_Check, TEST_FrontendMarta) — not cleaned up perché la creazione stessa è il caso di test. Restano in DB come lead di test riconoscibili dal prefisso TEST_.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Suite Fase 2: /app/backend/tests/test_meta_fase2.py (16 test) + Fase 1: /app/backend/tests/test_supergirl_api.py (27 test). Entrambe usano conftest.py in /app/backend/tests/ e EXPO_PUBLIC_BACKEND_URL. Per riproduzione bug idempotency: curl POST /api/integrations/meta/simulate con {\"nome\":\"X\",\"leadgen_id\":\"foo\"} due volte → entrambe restituiscono duplicate:false invece che la seconda duplicate:true. Fix: aggiungere leadgen_id al modello SimLeadInput (server.py:1118). Dopo il fix, rilanciare test_meta_fase2::TestMetaSimulate::test_idempotency_same_leadgen_id per verificare 16/16.",
+  "rca_of_issue": "BUG IDEMPOTENZA META SIMULATE — RCA: il modello Pydantic `SimLeadInput` (server.py:1118-1131) definisce solo nome/cognome/telefono/email/servizio/sede/campagna/inserzione/piattaforma/ig_username/ig_display_name/foto_profilo. Manca il campo `leadgen_id`. Quando FastAPI valida il body con SimLeadInput.dict(), i campi non dichiarati vengono scartati silenziosamente. Quindi `ingest_meta_lead(body.dict())` riceve un dict senza chiave leadgen_id, cade nel ramo `if leadgen_id:` (falso) e crea sempre un nuovo lead. Reproduction: due curl POST con stesso leadgen_id ritornano ID lead diversi (verificato). Fix minimo: `leadgen_id: Optional[str] = None` in SimLeadInput. Nessun cambiamento necessario a ingest_meta_lead che già implementa correttamente la logica di deduplicazione via `db.leads.find_one({\"leadgen_id\": ...})`."
+}

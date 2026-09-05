@@ -6,6 +6,8 @@ l'implementazione interna senza toccare frontend o schema.
 """
 import os
 import uuid
+import hmac
+import hashlib
 import logging
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
@@ -13,7 +15,9 @@ from typing import List, Optional
 
 import jwt
 import bcrypt
-from fastapi import FastAPI, APIRouter, Depends, HTTPException, status, Query
+import httpx
+from fastapi import FastAPI, APIRouter, Depends, HTTPException, status, Query, Request
+from fastapi.responses import PlainTextResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -30,6 +34,20 @@ db = client[os.environ["DB_NAME"]]
 JWT_SECRET = os.environ["JWT_SECRET"]
 JWT_ALGORITHM = os.environ.get("JWT_ALGORITHM", "HS256")
 TOKEN_MINUTES = int(os.environ.get("ACCESS_TOKEN_MINUTES", "10080"))
+
+# --- Meta Lead Ads (Fase 2) --- secrets solo lato server ---
+META_APP_ID = os.environ.get("META_APP_ID", "REPLACE_ME")
+META_APP_SECRET = os.environ.get("META_APP_SECRET", "REPLACE_ME")
+META_PAGE_ACCESS_TOKEN = os.environ.get("META_PAGE_ACCESS_TOKEN", "REPLACE_ME")
+META_PAGE_ID = os.environ.get("META_PAGE_ID", "REPLACE_ME")
+META_VERIFY_TOKEN = os.environ.get("META_VERIFY_TOKEN", "")
+META_API_VERSION = os.environ.get("META_API_VERSION", "v21.0")
+GRAPH = f"https://graph.facebook.com/{META_API_VERSION}"
+
+
+def meta_configured() -> bool:
+    vals = [META_APP_ID, META_APP_SECRET, META_PAGE_ACCESS_TOKEN, META_PAGE_ID]
+    return all(v and v != "REPLACE_ME" for v in vals)
 
 app = FastAPI(title="SUPER GIRL API")
 api = APIRouter(prefix="/api")
@@ -899,12 +917,225 @@ async def update_settings(body: dict, user: dict = Depends(require_admin)):
 
 @api.get("/integrations")
 async def get_integrations(user: dict = Depends(current_user)):
+    meta_status = "configurato" if meta_configured() else "non_attivo"
     return {
-        "meta": {"name": "Meta Lead Ads", "status": "non_attivo", "phase": "Fase 2"},
+        "meta": {"name": "Meta Lead Ads", "status": meta_status, "phase": "Fase 2",
+                 "configured": meta_configured()},
         "whatsapp": {"name": "WhatsApp Business Cloud API", "status": "non_attivo",
-                     "phase": "Fase 3"},
-        "ai": {"name": "AI Provider", "status": "non_attivo", "phase": "Fase 4"},
+                     "phase": "Fase 3", "configured": False},
+        "ai": {"name": "AI Provider", "status": "non_attivo", "phase": "Fase 4",
+               "configured": False},
     }
+
+
+# ---------------------------------------------------------------------------
+# META LEAD ADS (Fase 2) — ingestione lead + webhook + simulatore
+# ---------------------------------------------------------------------------
+async def ensure_campaign(nome: Optional[str], inserzione: Optional[str],
+                          servizio: Optional[str]):
+    if not nome:
+        return
+    camp = await db.campaigns.find_one({"nome": nome})
+    if not camp:
+        await db.campaigns.insert_one({
+            "id": str(uuid.uuid4()), "nome": nome,
+            "inserzioni": [inserzione] if inserzione else [],
+            "servizio": servizio or "",
+        })
+    elif inserzione and inserzione not in (camp.get("inserzioni") or []):
+        await db.campaigns.update_one({"id": camp["id"]},
+                                      {"$push": {"inserzioni": inserzione}})
+
+
+async def ingest_meta_lead(data: dict) -> dict:
+    """Flusso Fase 2: creazione lead -> associazione campagna/inserzione ->
+    creazione conversazione -> avvio workflow WhatsApp (messaggio iniziale
+    simulato, WhatsApp reale in Fase 3) -> notifica staff.
+    Idempotente su leadgen_id se presente."""
+    leadgen_id = data.get("leadgen_id")
+    if leadgen_id:
+        existing = await db.leads.find_one({"leadgen_id": leadgen_id}, {"_id": 0})
+        if existing:
+            conv = await db.conversations.find_one({"lead_id": existing["id"]}, {"_id": 0})
+            return {"lead": existing, "conversation_id": conv["id"] if conv else None,
+                    "duplicate": True}
+
+    lid = str(uuid.uuid4())
+    cid = str(uuid.uuid4())
+    now = iso(now_utc())
+    nome = (data.get("nome") or "Lead").strip()
+    cognome = (data.get("cognome") or "").strip()
+    campagna = data.get("campagna")
+    inserzione = data.get("inserzione")
+    servizio = data.get("servizio")
+
+    await ensure_campaign(campagna, inserzione, servizio)
+
+    lead = {
+        "id": lid, "nome": nome, "cognome": cognome,
+        "telefono": data.get("telefono", ""), "email": data.get("email", ""),
+        "servizio": servizio or "", "sede": data.get("sede", ""),
+        "campagna": campagna or "", "inserzione": inserzione or "",
+        "piattaforma": data.get("piattaforma") or "Instagram",
+        "ig_username": data.get("ig_username"),
+        "ig_display_name": data.get("ig_display_name"),
+        "foto_profilo": data.get("foto_profilo"),
+        "data_acquisizione": now, "ultimo_contatto": now,
+        "stato_pipeline": "nuovo_lead", "temperature": "da_coltivare",
+        "operatore_assegnato": None, "esigenza": "", "obiezioni": "",
+        "note_staff": "", "ai_summary": None, "handoff_at": None,
+        "leadgen_id": leadgen_id, "origine": "meta",
+    }
+    await db.leads.insert_one(lead)
+
+    greeting = (
+        f"Ciao {nome}! 😊 Grazie per aver risposto alla nostra pubblicità"
+        + (f" \"{campagna}\"" if campagna else "")
+        + ". Sono l'assistente di SUPER GIRL. Posso farti qualche domanda per "
+          "aiutarti al meglio?"
+    )
+    await db.conversations.insert_one({
+        "id": cid, "lead_id": lid, "ai_attiva": True, "stato": "nuovo_lead",
+        "unread": 0, "operatore": None, "last_message": greeting,
+        "last_message_at": now,
+    })
+    await db.messages.insert_one({
+        "id": str(uuid.uuid4()), "conversation_id": cid, "sender": "ai",
+        "text": greeting, "created_at": now, "read": True,
+    })
+    await db.lead_status_history.insert_one({
+        "id": str(uuid.uuid4()), "lead_id": lid, "from_status": None,
+        "to_status": "nuovo_lead", "changed_by": "meta", "created_at": now,
+    })
+    await db.followups.insert_one({
+        "id": str(uuid.uuid4()), "lead_id": lid, "label": "Follow-up 1",
+        "delay": "2 ore", "status": "programmato", "created_at": now,
+        "updated_at": now,
+    })
+    await create_notification("nuova_chat", lead,
+                              f"Nuovo lead da Meta ({campagna or 'campagna'})")
+    lead_clean = await db.leads.find_one({"id": lid}, {"_id": 0})
+    return {"lead": lead_clean, "conversation_id": cid, "duplicate": False}
+
+
+async def graph_get(node: str, fields: str) -> dict:
+    async with httpx.AsyncClient(timeout=15) as c:
+        r = await c.get(f"{GRAPH}/{node}",
+                        params={"fields": fields, "access_token": META_PAGE_ACCESS_TOKEN})
+    if r.is_error:
+        raise RuntimeError(f"Graph error {r.status_code}: {r.text}")
+    return r.json()
+
+
+def _field_map(field_data: list) -> dict:
+    return {x["name"]: (x.get("values") or [None])[0]
+            for x in field_data if x.get("name")}
+
+
+async def retrieve_and_ingest(leadgen_id: str, event: dict):
+    """Recupera i dati completi del lead da Graph API e li ingesta."""
+    lead = await graph_get(
+        leadgen_id,
+        "id,created_time,form_id,ad_id,adset_id,campaign_id,field_data")
+    values = _field_map(lead.get("field_data", []))
+    full = values.get("full_name") or ""
+    parts = full.split(" ", 1)
+    nome, cognome = (parts[0], parts[1] if len(parts) > 1 else "")
+    campagna, inserzione, platform = None, None, "Facebook"
+    ad_id = lead.get("ad_id") or event.get("ad_id")
+    if ad_id:
+        try:
+            ad = await graph_get(ad_id, "id,name,campaign{id,name},creative{id,name,instagram_actor_id}")
+            campagna = (ad.get("campaign") or {}).get("name")
+            inserzione = ad.get("name")
+            if (ad.get("creative") or {}).get("instagram_actor_id"):
+                platform = "Instagram"
+        except RuntimeError:
+            pass
+    return await ingest_meta_lead({
+        "leadgen_id": lead.get("id", leadgen_id),
+        "nome": nome, "cognome": cognome,
+        "telefono": values.get("phone_number") or values.get("phone"),
+        "email": values.get("email"),
+        "campagna": campagna, "inserzione": inserzione, "piattaforma": platform,
+    })
+
+
+@api.get("/integrations/meta/webhook", response_class=PlainTextResponse)
+async def meta_verify(request: Request):
+    params = request.query_params
+    mode = params.get("hub.mode")
+    token = params.get("hub.verify_token")
+    challenge = params.get("hub.challenge")
+    if mode == "subscribe" and META_VERIFY_TOKEN and hmac.compare_digest(
+            token or "", META_VERIFY_TOKEN):
+        return challenge or ""
+    raise HTTPException(status_code=403, detail="Verifica webhook fallita")
+
+
+@api.post("/integrations/meta/webhook")
+async def meta_webhook(request: Request):
+    raw = await request.body()
+    sig = request.headers.get("x-hub-signature-256")
+    if META_APP_SECRET and META_APP_SECRET != "REPLACE_ME":
+        expected = "sha256=" + hmac.new(
+            META_APP_SECRET.encode(), raw, hashlib.sha256).hexdigest()
+        if not sig or not hmac.compare_digest(expected, sig):
+            raise HTTPException(status_code=403, detail="Firma non valida")
+    payload = await request.json()
+    if payload.get("object") != "page":
+        return {"ok": True}
+    for entry in payload.get("entry", []):
+        for change in entry.get("changes", []):
+            if change.get("field") != "leadgen":
+                continue
+            value = change.get("value", {})
+            leadgen_id = value.get("leadgen_id")
+            if leadgen_id and meta_configured():
+                try:
+                    await retrieve_and_ingest(leadgen_id, value)
+                except Exception as e:  # noqa
+                    logger.error(f"Meta ingest error: {e}")
+    return {"ok": True}
+
+
+@api.get("/integrations/meta/status")
+async def meta_status(user: dict = Depends(current_user)):
+    return {
+        "configured": meta_configured(),
+        "app_id_set": META_APP_ID != "REPLACE_ME",
+        "app_secret_set": META_APP_SECRET != "REPLACE_ME",
+        "page_token_set": META_PAGE_ACCESS_TOKEN != "REPLACE_ME",
+        "page_id_set": META_PAGE_ID != "REPLACE_ME",
+        # verify token mostrato solo all'admin per la configurazione su Meta
+        "verify_token": META_VERIFY_TOKEN if user["role"] == "admin" else None,
+        "webhook_path": "/api/integrations/meta/webhook",
+        "subscribe_field": "leadgen",
+        "api_version": META_API_VERSION,
+    }
+
+
+class SimLeadInput(BaseModel):
+    nome: str
+    cognome: str = ""
+    telefono: str = ""
+    email: str = ""
+    servizio: str = ""
+    sede: str = ""
+    campagna: str = ""
+    inserzione: str = ""
+    piattaforma: str = "Instagram"
+    ig_username: Optional[str] = None
+    ig_display_name: Optional[str] = None
+    foto_profilo: Optional[str] = None
+    leadgen_id: Optional[str] = None
+
+
+@api.post("/integrations/meta/simulate")
+async def meta_simulate(body: SimLeadInput, user: dict = Depends(require_admin)):
+    """Simula la ricezione di un lead da Meta (test Fase 2, senza API reali)."""
+    res = await ingest_meta_lead(body.dict())
+    return res
 
 
 # ---------------------------------------------------------------------------

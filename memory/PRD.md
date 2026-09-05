@@ -40,10 +40,22 @@ FASE 1 = demo completa con dati simulati, senza integrazioni reali (no Meta, no 
 - [x] Testato: 27/27 backend + flussi frontend principali.
 
 ## Backlog / Fasi future (NON in Fase 1)
-- P1 Fase 2: webhook Meta Lead Ads → creazione lead/campagna/inserzione/conversazione.
+- P1 Fase 2: webhook Meta Lead Ads → creazione lead/campagna/inserzione/conversazione. [FATTO — infrastruttura + simulatore, credenziali reali da inserire]
 - P1 Fase 3: WhatsApp Business Cloud API (inbound/outbound/webhook/template/stati/opt-in).
 - P1 Fase 4: AI reale (provider) con Knowledge Base, storia, regole handoff via funzioni backend controllate.
-- P2: follow-up realmente schedulati; notifiche push (solo su build reale); split server.py in router; analytics via aggregation pipeline.
+- P2: follow-up realmente schedulati; notifiche push (solo su build reale); split server.py in router; analytics via aggregation pipeline; spostare retrieve_and_ingest fuori dal request path del webhook (BackgroundTask) per rispettare il timeout 5s di Meta.
+
+## Fase 2 — Meta Lead Ads (2026-06)
+- Infrastruttura tecnica completa (secrets solo lato server, `.env`: META_APP_ID/APP_SECRET/PAGE_ACCESS_TOKEN/PAGE_ID/VERIFY_TOKEN/API_VERSION):
+  - GET `/api/integrations/meta/webhook` (verifica hub.challenge + verify token)
+  - POST `/api/integrations/meta/webhook` (verifica X-Hub-Signature-256, parsing leadgen, Graph API retrieve → ingest) — attivo solo quando le credenziali reali sono inserite
+  - `ingest_meta_lead()`: lead(nuovo_lead, origine=meta) → associazione/creazione campagna+inserzione → conversazione(ai_attiva) → messaggio AI iniziale (workflow WhatsApp simulato, reale in Fase 3) → follow-up programmato → notifica nuova_chat. Idempotente su leadgen_id.
+  - GET `/api/integrations/meta/status` (verify_token visibile solo admin)
+  - POST `/api/integrations/meta/simulate` (admin) — Simulatore Lead Meta
+- Frontend: schermata `/altro/meta` con stato integrazione, Callback URL + Verify Token copiabili, guida passo-passo per creare l'app Meta, e Simulatore Lead (admin) che crea il lead e apre la conversazione.
+- Testato: 16/16 backend (incl. idempotenza dopo fix) + flusso frontend admin end-to-end.
+- DA FARE per attivazione reale: l'utente fornisce App ID, App Secret, Page Access Token, Page ID → inserimento in `.env` → configurazione webhook su Meta (Callback URL + Verify Token, campo `leadgen`) → verifica Business + App Review `leads_retrieval`.
+
 
 ## Credenziali demo
 admin@supergirl.app / Admin123! · operatore@supergirl.app / Operatore123!
