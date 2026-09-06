@@ -80,10 +80,10 @@ async def seed_database(db):
         {"id": str(uuid.uuid4()), "nome": "Milano Centro",
          "indirizzo": "Via della Spiga 12, Milano", "telefono": "+39 02 1234567",
          "orari": "Lun-Sab 9:00-19:00", "info": "Parcheggio convenzionato in zona."},
-        {"id": str(uuid.uuid4()), "nome": "Roma Prati",
-         "indirizzo": "Via Cola di Rienzo 88, Roma", "telefono": "+39 06 7654321",
+        {"id": str(uuid.uuid4()), "nome": "Verona",
+         "indirizzo": "Via Mazzini 24, Verona", "telefono": "+39 045 7654321",
          "orari": "Lun-Ven 9:30-19:30, Sab 9:30-14:00",
-         "info": "A 5 minuti dalla metro Lepanto."},
+         "info": "A 5 minuti da Piazza Bra."},
     ]
     await db.locations.insert_many(locations)
 
@@ -155,9 +155,9 @@ async def seed_database(db):
                   "Medicina estetica su valutazione medica.",
         "promozioni": "Prima consulenza corpo gratuita. Pacchetto laser "
                       "ascelle+inguine a €399.",
-        "sedi": "Milano Centro (Via della Spiga 12) e Roma Prati "
-                "(Via Cola di Rienzo 88).",
-        "orari": "Milano: Lun-Sab 9-19. Roma: Lun-Ven 9:30-19:30, Sab 9:30-14.",
+        "sedi": "Milano Centro (Via della Spiga 12) e Verona "
+                "(Via Mazzini 24).",
+        "orari": "Milano: Lun-Sab 9-19. Verona: Lun-Ven 9:30-19:30, Sab 9:30-14.",
         "faq": "Quante sedute servono? Dipende dal trattamento. "
                "I trattamenti sono dolorosi? Generalmente no.",
         "obiezioni": "'Costa troppo' -> valorizzare i risultati e i pacchetti. "
@@ -271,7 +271,7 @@ async def seed_database(db):
              esigenza="Rimodellamento addome")
 
     add_lead("Chiara", "Bianchi", "+39 340 2223344", "chiara.b@email.it",
-             svc["Laser Epilazione Definitiva"], "Roma Prati",
+             svc["Laser Epilazione Definitiva"], "Verona",
              "Epilazione Definitiva", "Promo Pacchetto Ascelle+Inguine",
              "nuovo_lead", "da_coltivare", 0, None, True, 1,
              [("cliente", "Buongiorno, informazioni sul laser", t(0, 5))],
@@ -291,7 +291,7 @@ async def seed_database(db):
              esigenza="Riduzione addome post gravidanza")
 
     add_lead("Alessia", "Ferrari", "+39 320 5556677", "alessia.f@email.it",
-             svc["Pulizia Viso Profonda"], "Roma Prati",
+             svc["Pulizia Viso Profonda"], "Verona",
              "Viso Glow", "Reel Pelle Luminosa",
              "ai_conversazione", "da_coltivare", 2, None, True, 0,
              [("cliente", "Salve, ho la pelle spenta, cosa consigliate?", t(2, 0)),
@@ -311,7 +311,7 @@ async def seed_database(db):
              esigenza="Laser gambe complete")
 
     add_lead("Elena", "Greco", "+39 349 7778899", "elena.greco@email.it",
-             svc["Trattamento Corpo Rimodellante"], "Roma Prati",
+             svc["Trattamento Corpo Rimodellante"], "Verona",
              "Corpo Estate 2026", "Video Addome Piatto",
              "in_attesa", "da_coltivare", 4, None, True, 0,
              [("cliente", "Il trattamento corpo fa male?", t(4, 0)),
@@ -337,7 +337,7 @@ async def seed_database(db):
              obiezioni="Paura effetto finto")
 
     add_lead("Sofia", "Marino", "+39 352 9990011", "sofia.marino@email.it",
-             svc["Trattamento Corpo Rimodellante"], "Roma Prati",
+             svc["Trattamento Corpo Rimodellante"], "Verona",
              "Corpo Estate 2026", "Carosello Rimodellante",
              "interessata", "molto_calda", 6, "Sara Operatrice", True, 0,
              [("cliente", "Ho visto i risultati sul carosello, wow!", t(6, 0)),
@@ -383,7 +383,7 @@ async def seed_database(db):
 
     l2, c2 = add_lead(
         "Camilla", "Villa", "+39 334 7654321", "camilla.villa@email.it",
-        svc["Laser Epilazione Definitiva"], "Roma Prati",
+        svc["Laser Epilazione Definitiva"], "Verona",
         "Epilazione Definitiva", "Promo Pacchetto Ascelle+Inguine",
         "da_fissare", "molto_calda", 1, "Sara Operatrice", False, 0,
         [("cliente", "Buongiorno, mi interessa il pacchetto ascelle e inguine",
@@ -437,7 +437,7 @@ async def seed_database(db):
 
     # ---- 1 NON INTERESSATA ----
     add_lead("Francesca", "Moretti", "+39 336 5566778", "franci.m@email.it",
-             svc["Medicina Estetica Viso"], "Roma Prati",
+             svc["Medicina Estetica Viso"], "Verona",
              "Viso Glow", "Reel Pelle Luminosa",
              "non_interessata", "non_qualificata", 8, None, False, 0,
              [("cliente", "Avevo cliccato per sbaglio, non sono interessata",

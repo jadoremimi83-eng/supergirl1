@@ -1015,7 +1015,7 @@ async def ingest_meta_lead(data: dict) -> dict:
     greeting = (
         f"Ciao {nome}, sono {ASSISTANT_NAME} di {BRAND_NAME} 💛\n"
         f"Ho visto che sei interessata al trattamento {servizio or 'estetico'}. "
-        f"Ho ancora qualche posto disponibile per la prossima settimana: "
+        f"Ho ancora qualche disponibilità per la prossima settimana: "
         f"preferisci venire la mattina o il pomeriggio?"
     )
     await db.conversations.insert_one({
@@ -1196,7 +1196,10 @@ async def build_ai_system_prompt(lead: dict) -> str:
         f"REGOLA FONDAMENTALE: non inventare mai informazioni. Se non conosci una risposta, di' che "
         f"farai intervenire lo staff.\n\n"
         f"CONTESTO LEAD: nome={lead.get('nome')}, trattamento d'interesse={servizio}, "
-        f"sede={lead.get('sede') or 'da definire'}, campagna={lead.get('campagna')}.\n"
+        f"sede={lead.get('sede') or 'NON INDICATA'}, campagna={lead.get('campagna')}.\n"
+        f"SEDI DISPONIBILI: Milano e Verona. Se la sede del lead è NON INDICATA, a un certo "
+        f"punto chiedi esplicitamente: 'Ti interessa la sede di Milano o quella di Verona?'. "
+        f"Se invece è già indicata, non richiederla.\n"
         f"DETTAGLI TRATTAMENTO: {svc.get('descrizione','')} Prezzo: {svc.get('prezzo','')}. "
         f"Promozione: {svc.get('promozione','')}. Info: {svc.get('info','')}.\n\n"
         f"KNOWLEDGE BASE:\n"
@@ -1343,8 +1346,8 @@ async def whatsapp_send_template(to: str, nome: str, servizio: str, image_link: 
         components.append({"type": "header", "parameters": [
             {"type": "image", "image": {"link": image_link}}]})
     components.append({"type": "body", "parameters": [
-        {"type": "text", "parameter_name": "name", "text": nome},
-        {"type": "text", "parameter_name": "service", "text": servizio}]})
+        {"type": "text", "text": nome},
+        {"type": "text", "text": servizio}]})
     payload = {"messaging_product": "whatsapp", "recipient_type": "individual",
                "to": to, "type": "template",
                "template": {"name": cfg["template_name"],
