@@ -1365,10 +1365,19 @@ async def whatsapp_send_template(to: str, nome: str, servizio: str, image_link: 
 async def wa_verify(request: Request):
     cfg = await get_wa_config()
     p = request.query_params
+    h = request.headers
+    logger.info(
+        "WA_WEBHOOK_GET | query=%s | ua=%r | x-forwarded-for=%r | cf-connecting-ip=%r | x-real-ip=%r | host=%r",
+        dict(p), h.get("user-agent"), h.get("x-forwarded-for"),
+        h.get("cf-connecting-ip"), h.get("x-real-ip"), h.get("host"),
+    )
     expected = (cfg.get("verify_token") or "").strip()
     received = (p.get("hub.verify_token") or "").strip()
     if p.get("hub.mode") == "subscribe" and expected and hmac.compare_digest(received, expected):
+        logger.info("WA_WEBHOOK_GET -> 200 challenge=%r", p.get("hub.challenge"))
         return p.get("hub.challenge") or ""
+    logger.info("WA_WEBHOOK_GET -> 403 (mode=%r expected_set=%s match=%s)",
+                p.get("hub.mode"), bool(expected), received == expected)
     raise HTTPException(status_code=403, detail="Verifica webhook fallita")
 
 
