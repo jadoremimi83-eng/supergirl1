@@ -17,6 +17,7 @@ import { Image } from "expo-image";
 import { api } from "@/src/api";
 import { colors, spacing, radius, type, font, stageOf } from "@/src/theme";
 import { Avatar, AiBadge, Loading, Sheet, GoldButton } from "@/src/components/ui";
+import { useAssistant } from "@/src/useAssistant";
 import { chatTime } from "@/src/time";
 
 type Msg = { id: string; sender: "cliente" | "ai" | "operatore"; text: string; created_at: string };
@@ -26,6 +27,7 @@ export default function Conversation() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const listRef = useRef<FlatList>(null);
+  const { assistant } = useAssistant();
 
   const [conv, setConv] = useState<any>(null);
   const [lead, setLead] = useState<any>(null);
@@ -134,9 +136,12 @@ export default function Conversation() {
           ]}
         >
           {!isCustomer && (
-            <Text style={[styles.senderTag, isAi ? { color: colors.brandPrimary } : { color: colors.brandSecondary }]}>
-              {isAi ? "SUPER GIRL · AI" : "OPERATORE"}
-            </Text>
+            <View style={styles.senderRow}>
+              {isAi ? <Avatar uri={assistant.avatarUri} name={assistant.name} size={16} /> : null}
+              <Text style={[styles.senderTag, isAi ? { color: colors.brandPrimary } : { color: colors.brandSecondary }]}>
+                {isAi ? `${assistant.name.toUpperCase()} · AI` : "OPERATORE"}
+              </Text>
+            </View>
           )}
           <Text style={[styles.msgText, item.sender === "operatore" && { color: colors.onSurfaceInverse }]}>
             {item.text}
@@ -330,6 +335,7 @@ const styles = StyleSheet.create({
   chatImage: { width: 240, height: 180, backgroundColor: colors.surfaceTertiary },
   imgCaption: { color: colors.onBrandTertiary, fontSize: 11, fontWeight: "700", padding: spacing.sm },
   senderTag: { fontSize: 9.5, fontWeight: "800", letterSpacing: 0.6, marginBottom: 2 },
+  senderRow: { flexDirection: "row", alignItems: "center", gap: 5, marginBottom: 3 },
   msgText: { color: colors.onSurface, fontSize: 14.5, lineHeight: 20 },
   msgTime: { color: colors.onSurfaceTertiary, fontSize: 10, alignSelf: "flex-end", marginTop: 3 },
   demoBar: {

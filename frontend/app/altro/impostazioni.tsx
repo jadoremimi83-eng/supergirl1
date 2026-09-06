@@ -3,16 +3,20 @@ import { View, Text, StyleSheet, ScrollView, Switch, Pressable } from "react-nat
 import { useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
-import { api } from "@/src/api";
+import * as ImagePicker from "expo-image-picker";
+import { api, uploadImage } from "@/src/api";
 import { useAuth } from "@/src/auth";
+import { useAssistant } from "@/src/useAssistant";
 import { colors, spacing, radius, type } from "@/src/theme";
 import { SubHeader } from "@/src/components/SubHeader";
-import { Loading, SectionTitle } from "@/src/components/ui";
+import { Loading, SectionTitle, Avatar } from "@/src/components/ui";
 
 export default function Impostazioni() {
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
+  const { assistant, refresh } = useAssistant();
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
   const [settings, setSettings] = useState<any>(null);
   const [followups, setFollowups] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -37,6 +41,20 @@ export default function Impostazioni() {
     const next = { ...followups, enabled: value };
     setFollowups(next);
     if (isAdmin) await api.patch("/followups", { enabled: value, steps: followups.steps });
+  };
+
+  const changeAssistantPhoto = async () => {
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) return;
+    const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ["images"], quality: 0.8 });
+    if (res.canceled || !res.assets?.length) return;
+    setUploadingAvatar(true);
+    try {
+      const up = await uploadImage(res.assets[0].uri, "andrea.jpg");
+      await api.patch("/assistant", { avatar_url: up.url });
+      await refresh();
+    } catch {}
+    setUploadingAvatar(false);
   };
 
   if (loading || !settings || !followups) {
@@ -69,11 +87,25 @@ export default function Impostazioni() {
         </View>
 
         {/* AI */}
-        <SectionTitle>AI</SectionTitle>
+        <SectionTitle>Assistente AI</SectionTitle>
         <View style={styles.card}>
-          <Line label="Stato" value="Attiva (simulata)" />
-          <Line label="Modello" value={settings.ai?.modello || "Demo"} />
-          <Line label="Handoff su prenotazione" value="Attivo" last />
+          <View style={styles.assistantRow}>
+            <Avatar uri={assistant.avatarUri} name={assistant.name} size={56} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.assistantName}>{assistant.name}</Text>
+              <Text style={styles.assistantRole}>Assistente commerciale · GPT-5.4</Text>
+            </View>
+            {isAdmin && (
+              <Pressable onPress={changeAssistantPhoto} style={styles.changePhoto} testID="change-assistant-photo">
+                <Feather name={uploadingAvatar ? "loader" : "camera"} size={15} color={colors.brandPrimary} />
+                <Text style={styles.changePhotoText}>{uploadingAvatar ? "..." : "Cambia foto"}</Text>
+              </Pressable>
+            )}
+          </View>
+          <View style={styles.lineBorderTop}>
+            <Line label="Stato" value="Attiva (GPT-5.4)" />
+            <Line label="Handoff su prenotazione" value="Attivo" last />
+          </View>
         </View>
 
         {/* Follow-up */}
@@ -142,6 +174,12 @@ function NotifToggle({ label, value, onChange, disabled, k, last }: any) {
 
 const styles = StyleSheet.create({
   card: { backgroundColor: colors.surfaceSecondary, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, paddingHorizontal: spacing.lg, marginBottom: spacing.lg },
+  assistantRow: { flexDirection: "row", alignItems: "center", gap: spacing.md, paddingVertical: spacing.md },
+  assistantName: { color: colors.onSurface, fontSize: type.lg, fontWeight: "700" },
+  assistantRole: { color: colors.onSurfaceTertiary, fontSize: 12, marginTop: 2 },
+  changePhoto: { flexDirection: "row", alignItems: "center", gap: 5, borderWidth: 1, borderColor: colors.borderStrong, borderRadius: radius.pill, paddingHorizontal: spacing.md, paddingVertical: 7 },
+  changePhotoText: { color: colors.brandPrimary, fontSize: 12, fontWeight: "700" },
+  lineBorderTop: { borderTopWidth: 1, borderTopColor: colors.divider },
   line: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: spacing.md },
   lineBorder: { borderBottomWidth: 1, borderBottomColor: colors.divider },
   lineLabel: { color: colors.onSurfaceTertiary, fontSize: 13 },

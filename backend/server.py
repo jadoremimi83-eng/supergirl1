@@ -1483,6 +1483,30 @@ async def wa_status(user: dict = Depends(current_user)):
 
 
 # ---------------------------------------------------------------------------
+# ASSISTENTE AI — profilo/avatar (Andrea), sostituibile da Admin
+# ---------------------------------------------------------------------------
+@api.get("/assistant")
+async def get_assistant(user: dict = Depends(current_user)):
+    doc = await db.integration_config.find_one({"key": "assistant"}, {"_id": 0}) or {}
+    return {"name": doc.get("name") or ASSISTANT_NAME,
+            "avatar_url": doc.get("avatar_url")}
+
+
+class AssistantInput(BaseModel):
+    name: Optional[str] = None
+    avatar_url: Optional[str] = None
+
+
+@api.patch("/assistant")
+async def set_assistant(body: AssistantInput, user: dict = Depends(require_admin)):
+    updates = {k: v for k, v in body.dict().items() if v is not None}
+    if updates:
+        await db.integration_config.update_one(
+            {"key": "assistant"}, {"$set": {**updates, "key": "assistant"}}, upsert=True)
+    return await get_assistant(user)
+
+
+# ---------------------------------------------------------------------------
 # NOTIFICHE
 # ---------------------------------------------------------------------------
 @api.get("/notifications")

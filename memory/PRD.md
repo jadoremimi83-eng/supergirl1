@@ -66,5 +66,9 @@ FASE 1 = demo completa con dati simulati, senza integrazioni reali (no Meta, no 
 - Env aggiunti: EMERGENT_LLM_KEY, AI_MODEL, AI_PROVIDER, WHATSAPP_* , PUBLIC_BASE_URL. Tutti i segreti lato server; le credenziali WhatsApp editabili sono in DB (mai nel codice).
 - Testato: 19/19 backend + flusso frontend. DA FARE attivazione reale: inserire credenziali WhatsApp (numero personale per test → poi Business) da Impostazioni, creare/approvare template immagine su Meta, e per Meta Lead Ads i token reali.
 
+## Assistente AI — avatar (2026-06)
+- Config `integration_config` key=assistant `{name, avatar_url}`. GET `/api/assistant` (auth), PATCH (admin).
+- Avatar ufficiale caricato su Object Storage e impostato di default. Mostrato: profilo assistente (Impostazioni → Assistente AI) con "Cambia foto" admin, e accanto ai messaggi AI in chat. Sostituibile da Admin senza codice (`useAssistant` hook lato frontend).
+
 ## Credenziali demo
 admin@supergirl.app / Admin123! · operatore@supergirl.app / Operatore123!
