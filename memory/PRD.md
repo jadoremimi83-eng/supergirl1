@@ -72,3 +72,9 @@ FASE 1 = demo completa con dati simulati, senza integrazioni reali (no Meta, no 
 
 ## Credenziali demo
 admin@supergirl.app / Admin123! · operatore@supergirl.app / Operatore123!
+
+## Fix verifica webhook WhatsApp su Meta (2026-06)
+- Diagnosi (solo curl, nessun deploy): endpoint `GET /api/integrations/whatsapp/webhook` tecnicamente perfetto — HTTP 200, body raw challenge, `text/plain`, nessun redirect/CORS/blocco, raggiungibile anche dai crawler Meta/WhatsApp. Cause reali del rifiuto Meta isolate: (A) spazio/a-capo invisibile nel Verify Token copiato → 403; (B) `/` finale nel Callback URL → 307 redirect (Meta non lo segue).
+- Fix applicato: (1) confronto verify_token con `.strip()` su entrambi i lati → tollera spazi/a-capo accidentali; (2) strip dei campi al salvataggio PATCH; (3) campo "Verify Token" ora EDITABILE da Admin → WhatsApp Business; (4) token attivo impostato a `supergirl2026` (corto, digitabile a mano).
+- Istruzioni utente su Meta: Callback URL senza `/` finale + Verify Token `supergirl2026` (digitato) → Verifica e salva.
+- Verificato via curl: token pulito/con spazio/con a-capo → 200; token errato → 403.

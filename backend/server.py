@@ -1365,8 +1365,9 @@ async def whatsapp_send_template(to: str, nome: str, servizio: str, image_link: 
 async def wa_verify(request: Request):
     cfg = await get_wa_config()
     p = request.query_params
-    if p.get("hub.mode") == "subscribe" and cfg.get("verify_token") and hmac.compare_digest(
-            p.get("hub.verify_token") or "", cfg["verify_token"]):
+    expected = (cfg.get("verify_token") or "").strip()
+    received = (p.get("hub.verify_token") or "").strip()
+    if p.get("hub.mode") == "subscribe" and expected and hmac.compare_digest(received, expected):
         return p.get("hub.challenge") or ""
     raise HTTPException(status_code=403, detail="Verifica webhook fallita")
 
@@ -1468,6 +1469,9 @@ async def wa_get_config(user: dict = Depends(require_admin)):
 @api.patch("/integrations/whatsapp/config")
 async def wa_set_config(body: WaConfigInput, user: dict = Depends(require_admin)):
     updates = {k: v for k, v in body.dict().items() if v is not None and v != ""}
+    for k in ("verify_token", "phone_number_id", "waba_id", "token", "app_secret", "template_name", "template_language", "numero"):
+        if k in updates and isinstance(updates[k], str):
+            updates[k] = updates[k].strip()
     if updates:
         await db.integration_config.update_one(
             {"key": "whatsapp"}, {"$set": {**updates, "key": "whatsapp"}}, upsert=True)

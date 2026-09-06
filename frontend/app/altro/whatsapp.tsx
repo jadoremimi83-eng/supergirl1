@@ -32,6 +32,7 @@ export default function WhatsAppSettings() {
         numero: c.numero || "", phone_number_id: c.phone_number_id || "",
         waba_id: c.waba_id || "", template_name: c.template_name || "",
         template_language: c.template_language || "it", token: "", app_secret: "",
+        verify_token: c.verify_token || "",
       });
     } catch {
       // Fallback (es. Operatore senza permessi): la schermata resta usabile
@@ -43,7 +44,7 @@ export default function WhatsAppSettings() {
       setForm({
         numero: "", phone_number_id: "", waba_id: "",
         template_name: "nuovo_lead_foto", template_language: "it",
-        token: "", app_secret: "",
+        token: "", app_secret: "", verify_token: "",
       });
     }
     setLoading(false);
@@ -52,7 +53,7 @@ export default function WhatsAppSettings() {
 
   const save = async () => {
     const payload: any = {};
-    ["numero", "phone_number_id", "waba_id", "template_name", "template_language"].forEach((k) => {
+    ["numero", "phone_number_id", "waba_id", "template_name", "template_language", "verify_token"].forEach((k) => {
       if (form[k] !== undefined) payload[k] = form[k];
     });
     if (form.token) payload.token = form.token;
@@ -105,6 +106,8 @@ export default function WhatsAppSettings() {
             <Field label={`App Secret ${cfg.app_secret_masked ? "(impostato)" : ""}`} value={form.app_secret} onChange={(v: string) => setForm({ ...form, app_secret: v })} placeholder="Lascia vuoto per non modificare" secure />
             <Field label="Nome template (immagine)" value={form.template_name} onChange={(v: string) => setForm({ ...form, template_name: v })} />
             <Field label="Lingua template" value={form.template_language} onChange={(v: string) => setForm({ ...form, template_language: v })} />
+            <Field label="Verify Token (per la verifica su Meta)" value={form.verify_token} onChange={(v: string) => setForm({ ...form, verify_token: v })} placeholder="es. supergirl2026" />
+            <Text style={styles.fieldHint}>Usa un token corto e semplice (solo lettere/numeri): lo digiterai a mano su Meta, senza rischio di spazi nascosti.</Text>
             <GoldButton title={saved ? "Salvato ✓" : "Salva credenziali"} icon={saved ? "check" : "save"} onPress={save} testID="save-wa-config" />
           </>
         ) : (
@@ -164,6 +167,7 @@ const styles = StyleSheet.create({
   statusText: { color: colors.onSurface, fontSize: 13, fontWeight: "600", flex: 1 },
   hint: { color: colors.onSurfaceTertiary, fontSize: 12.5, lineHeight: 18, marginBottom: spacing.lg },
   label: { color: colors.onSurfaceSecondary, fontSize: 12, fontWeight: "700", marginBottom: 6 },
+  fieldHint: { color: colors.onSurfaceTertiary, fontSize: 11.5, lineHeight: 16, marginTop: -6, marginBottom: spacing.md },
   input: { color: colors.onSurface, fontSize: type.base, backgroundColor: colors.surfaceSecondary, borderRadius: radius.sm, borderWidth: 1, borderColor: colors.border, paddingHorizontal: spacing.md, paddingVertical: 11 },
   readonly: { color: colors.onSurfaceTertiary, fontSize: 12, fontStyle: "italic" },
   sectionTitle: { color: colors.onSurfaceTertiary, fontSize: 12, fontWeight: "700", letterSpacing: 1, textTransform: "uppercase", marginTop: spacing.xl, marginBottom: spacing.sm },
