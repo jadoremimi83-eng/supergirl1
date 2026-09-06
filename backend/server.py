@@ -1492,6 +1492,14 @@ async def get_assistant(user: dict = Depends(current_user)):
             "avatar_url": doc.get("avatar_url")}
 
 
+@api.get("/assistant/public")
+async def get_assistant_public():
+    """Profilo assistente accessibile senza auth (per la schermata di login)."""
+    doc = await db.integration_config.find_one({"key": "assistant"}, {"_id": 0}) or {}
+    return {"name": doc.get("name") or ASSISTANT_NAME,
+            "avatar_url": doc.get("avatar_url")}
+
+
 class AssistantInput(BaseModel):
     name: Optional[str] = None
     avatar_url: Optional[str] = None

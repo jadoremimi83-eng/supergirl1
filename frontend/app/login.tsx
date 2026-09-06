@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   View,
   Text,
@@ -9,6 +9,7 @@ import {
 } from "react-native";
 import { useRouter } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
+import { Image } from "expo-image";
 import { Feather } from "@expo/vector-icons";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -24,6 +25,19 @@ export default function Login() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [heroUri, setHeroUri] = useState<string | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetch(`${process.env.EXPO_PUBLIC_BACKEND_URL}/api/assistant/public`);
+        if (r.ok) {
+          const d = await r.json();
+          if (d.avatar_url) setHeroUri(`${process.env.EXPO_PUBLIC_BACKEND_URL}${d.avatar_url}`);
+        }
+      } catch {}
+    })();
+  }, []);
 
   const submit = async () => {
     if (!email || !password) {
@@ -64,10 +78,14 @@ export default function Login() {
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.brandBlock}>
-          <View style={styles.logoRing}>
-            <Text style={styles.logoInitials}>SG</Text>
-          </View>
-          <Text style={styles.brand}>SUPER GIRL</Text>
+          {heroUri ? (
+            <Image source={{ uri: heroUri }} style={styles.hero} contentFit="cover" transition={250} testID="login-hero" />
+          ) : (
+            <View style={styles.logoRing}>
+              <Text style={styles.logoInitials}>SG</Text>
+            </View>
+          )}
+          {!heroUri ? <Text style={styles.brand}>SUPER GIRL</Text> : null}
           <Text style={styles.tagline}>CRM CONVERSAZIONALE · AI</Text>
         </View>
 
@@ -151,7 +169,8 @@ export default function Login() {
 
 const styles = StyleSheet.create({
   content: { paddingHorizontal: spacing.xl, flexGrow: 1 },
-  brandBlock: { alignItems: "center", marginBottom: spacing["3xl"] },
+  brandBlock: { alignItems: "center", marginBottom: spacing["2xl"] },
+  hero: { width: "78%", aspectRatio: 1, borderRadius: radius.lg, marginBottom: spacing.lg, backgroundColor: colors.surfaceSecondary, borderWidth: 1, borderColor: colors.borderStrong },
   logoRing: {
     width: 84,
     height: 84,
