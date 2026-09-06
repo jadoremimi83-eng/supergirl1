@@ -35,3 +35,23 @@ export const api = {
     request(p, { method: "PATCH", body: body ? JSON.stringify(body) : undefined }),
   del: (p: string) => request(p, { method: "DELETE" }),
 };
+
+// Upload immagine (multipart) — gestisce sia web che native
+export async function uploadImage(uri: string, name = "photo.jpg", type = "image/jpeg") {
+  const { Platform } = require("react-native");
+  const token = await storage.secureGet<string>(TOKEN_KEY, "");
+  const form = new FormData();
+  if (Platform.OS === "web") {
+    const blob = await (await fetch(uri)).blob();
+    form.append("file", blob, name);
+  } else {
+    form.append("file", { uri, name, type } as any);
+  }
+  const res = await fetch(`${BASE}/api/upload`, {
+    method: "POST",
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: form,
+  });
+  if (!res.ok) throw new Error("Upload non riuscito");
+  return res.json();
+}

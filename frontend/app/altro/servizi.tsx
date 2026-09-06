@@ -3,13 +3,16 @@ import { View, Text, StyleSheet, ScrollView, Pressable, TextInput } from "react-
 import { useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
-import { api } from "@/src/api";
+import { Image } from "expo-image";
+import * as ImagePicker from "expo-image-picker";
+import { api, uploadImage } from "@/src/api";
 import { useAuth } from "@/src/auth";
 import { colors, spacing, radius, type } from "@/src/theme";
 import { SubHeader } from "@/src/components/SubHeader";
 import { Loading, Sheet, GoldButton } from "@/src/components/ui";
 
-const EMPTY = { nome: "", descrizione: "", prezzo: "", promozione: "", info: "", faq: "" };
+const EMPTY = { nome: "", descrizione: "", prezzo: "", promozione: "", info: "", faq: "", immagine: "" };
+const BACKEND = process.env.EXPO_PUBLIC_BACKEND_URL;
 
 export default function Servizi() {
   const insets = useSafeAreaInsets();
@@ -20,6 +23,7 @@ export default function Servizi() {
   const [sheet, setSheet] = useState(false);
   const [form, setForm] = useState<any>(EMPTY);
   const [editId, setEditId] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -33,9 +37,24 @@ export default function Servizi() {
   const openNew = () => { setForm(EMPTY); setEditId(null); setSheet(true); };
   const openEdit = (s: any) => { setForm(s); setEditId(s.id); setSheet(true); };
 
+  const pickImage = async () => {
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) return;
+    const res = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ["images"], quality: 0.7,
+    });
+    if (res.canceled || !res.assets?.length) return;
+    setUploading(true);
+    try {
+      const up = await uploadImage(res.assets[0].uri);
+      setForm((f: any) => ({ ...f, immagine: up.url }));
+    } catch {}
+    setUploading(false);
+  };
+
   const save = async () => {
     if (!form.nome.trim()) return;
-    const payload = { nome: form.nome, descrizione: form.descrizione, prezzo: form.prezzo, promozione: form.promozione, info: form.info, faq: form.faq };
+    const payload = { nome: form.nome, descrizione: form.descrizione, prezzo: form.prezzo, promozione: form.promozione, info: form.info, faq: form.faq, immagine: form.immagine || "" };
     if (editId) await api.patch(`/services/${editId}`, payload);
     else await api.post("/services", payload);
     setSheet(false);
@@ -52,6 +71,9 @@ export default function Servizi() {
         <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: insets.bottom + spacing.xl }} showsVerticalScrollIndicator={false}>
           {items.map((s) => (
             <Pressable key={s.id} onPress={() => isAdmin && openEdit(s)} style={styles.card} testID={`service-${s.id}`}>
+              {s.immagine ? (
+                <Image source={{ uri: `${BACKEND}${s.immagine}` }} style={styles.cardImg} contentFit="cover" transition={200} />
+              ) : null}
               <View style={styles.cardHead}>
                 <Text style={styles.name}>{s.nome}</Text>
                 {isAdmin && <Feather name="edit-2" size={15} color={colors.onSurfaceTertiary} />}
@@ -66,6 +88,20 @@ export default function Servizi() {
       )}
 
       <Sheet visible={sheet} onClose={() => setSheet(false)} title={editId ? "Modifica servizio" : "Nuovo servizio"}>
+        <Text style={styles.label}>Foto prima/dopo (primo messaggio WhatsApp)</Text>
+        <Pressable onPress={pickImage} style={styles.imgPicker} testID="pick-service-image">
+          {form.immagine ? (
+            <Image source={{ uri: `${BACKEND}${form.immagine}` }} style={styles.imgPreview} contentFit="cover" />
+          ) : (
+            <View style={styles.imgPlaceholder}>
+              <Feather name={uploading ? "loader" : "image"} size={22} color={colors.brandPrimary} />
+              <Text style={styles.imgPickText}>{uploading ? "Caricamento…" : "Carica foto"}</Text>
+            </View>
+          )}
+          {form.immagine ? (
+            <View style={styles.imgEditBadge}><Feather name="edit-2" size={12} color={colors.onBrandPrimary} /></View>
+          ) : null}
+        </Pressable>
         <Field label="Nome" value={form.nome} onChange={(v) => setForm({ ...form, nome: v })} />
         <Field label="Descrizione" value={form.descrizione} onChange={(v) => setForm({ ...form, descrizione: v })} multi />
         <Field label="Prezzo" value={form.prezzo} onChange={(v) => setForm({ ...form, prezzo: v })} />
@@ -94,7 +130,13 @@ export function Field({ label, value, onChange, multi }: { label: string; value:
 }
 
 const styles = StyleSheet.create({
-  card: { backgroundColor: colors.surfaceSecondary, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, padding: spacing.lg, marginBottom: spacing.md, gap: 6 },
+  card: { backgroundColor: colors.surfaceSecondary, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, padding: spacing.lg, marginBottom: spacing.md, gap: 6, overflow: "hidden" },
+  cardImg: { width: "100%", height: 140, borderRadius: radius.sm, marginBottom: spacing.sm, backgroundColor: colors.surfaceTertiary },
+  imgPicker: { height: 150, borderRadius: radius.md, borderWidth: 1, borderColor: colors.borderStrong, backgroundColor: colors.surface, overflow: "hidden", marginBottom: spacing.md, alignItems: "center", justifyContent: "center" },
+  imgPreview: { width: "100%", height: "100%" },
+  imgPlaceholder: { alignItems: "center", gap: 6 },
+  imgPickText: { color: colors.brandPrimary, fontSize: 13, fontWeight: "700" },
+  imgEditBadge: { position: "absolute", top: 8, right: 8, width: 28, height: 28, borderRadius: 14, backgroundColor: colors.brandPrimary, alignItems: "center", justifyContent: "center" },
   cardHead: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   name: { color: colors.onSurface, fontSize: type.lg, fontWeight: "700" },
   desc: { color: colors.onSurfaceSecondary, fontSize: 13, lineHeight: 19 },

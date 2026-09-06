@@ -9,6 +9,7 @@ import uuid
 import hmac
 import hashlib
 import logging
+import requests
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
@@ -16,9 +17,12 @@ from typing import List, Optional
 import jwt
 import bcrypt
 import httpx
-from fastapi import FastAPI, APIRouter, Depends, HTTPException, status, Query, Request
-from fastapi.responses import PlainTextResponse
+from fastapi import (FastAPI, APIRouter, Depends, HTTPException, status, Query,
+                     Request, UploadFile, File)
+from fastapi.responses import PlainTextResponse, Response
+from fastapi.concurrency import run_in_threadpool
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from emergentintegrations.llm.chat import LlmChat, UserMessage
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -43,6 +47,18 @@ META_PAGE_ID = os.environ.get("META_PAGE_ID", "REPLACE_ME")
 META_VERIFY_TOKEN = os.environ.get("META_VERIFY_TOKEN", "")
 META_API_VERSION = os.environ.get("META_API_VERSION", "v21.0")
 GRAPH = f"https://graph.facebook.com/{META_API_VERSION}"
+
+# --- AI reale (Emergent universal key) ---
+EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY", "")
+AI_MODEL = os.environ.get("AI_MODEL", "gpt-5.4")
+AI_PROVIDER = os.environ.get("AI_PROVIDER", "openai")
+BRAND_NAME = "J'adore Mimì"
+ASSISTANT_NAME = "Andrea"
+
+# --- Object Storage (immagini trattamenti) ---
+STORAGE_BASE = (os.environ.get("INTEGRATION_PROXY_URL") or "").strip() or "https://integrations.emergentagent.com"
+STORAGE_URL = STORAGE_BASE.rstrip("/") + "/objstore/api/v1/storage"
+_storage_key = None
 
 
 def meta_configured() -> bool:
@@ -468,20 +484,21 @@ async def simulate_ai_turn(conv_id: str, user: dict = Depends(current_user)):
             return {"message": reply, "handoff": True, "motivo": motivo,
                     "summary": summary, "new_status": "da_fissare"}
 
-    # Altrimenti: prosegue la qualificazione (una domanda alla volta)
-    ai_turns = len([m for m in msgs if m["sender"] == "ai"])
-    reply_text = AI_QUALIFY_STEPS[min(ai_turns, len(AI_QUALIFY_STEPS) - 1)]
+    # Altrimenti: l'AI commerciale reale genera la prossima risposta
+    reply_text = await ai_generate_reply(conv, lead)
     msg = {
         "id": str(uuid.uuid4()),
         "conversation_id": conv_id,
         "sender": "ai",
         "text": reply_text,
+        "type": "text",
         "created_at": iso(now_utc()),
         "read": True,
     }
     await db.messages.insert_one(msg)
     # aggiorna stato: AI in conversazione -> in attesa cliente + scalda il lead
     new_status = "in_attesa"
+    ai_turns = len([m for m in msgs if m["sender"] == "ai"])
     new_temp = "interessata" if ai_turns >= 2 else lead.get("temperature")
     from_status = lead["stato_pipeline"]
     await db.conversations.update_one({"id": conv_id}, {"$set": {
@@ -758,6 +775,7 @@ class ServiceInput(BaseModel):
     promozione: str = ""
     info: str = ""
     faq: str = ""
+    immagine: str = ""
 
 
 @api.get("/services")
@@ -918,13 +936,16 @@ async def update_settings(body: dict, user: dict = Depends(require_admin)):
 @api.get("/integrations")
 async def get_integrations(user: dict = Depends(current_user)):
     meta_status = "configurato" if meta_configured() else "non_attivo"
+    wa_cfg = await get_wa_config()
+    wa_ok = wa_is_configured(wa_cfg)
     return {
         "meta": {"name": "Meta Lead Ads", "status": meta_status, "phase": "Fase 2",
                  "configured": meta_configured()},
-        "whatsapp": {"name": "WhatsApp Business Cloud API", "status": "non_attivo",
-                     "phase": "Fase 3", "configured": False},
-        "ai": {"name": "AI Provider", "status": "non_attivo", "phase": "Fase 4",
-               "configured": False},
+        "whatsapp": {"name": "WhatsApp Business Cloud API",
+                     "status": "configurato" if wa_ok else "non_attivo",
+                     "phase": "Fase 3", "configured": wa_ok},
+        "ai": {"name": "AI Provider (GPT-5.4)", "status": "configurato",
+               "phase": "Fase 4", "configured": True},
     }
 
 
@@ -988,21 +1009,37 @@ async def ingest_meta_lead(data: dict) -> dict:
     }
     await db.leads.insert_one(lead)
 
+    svc_doc = await db.services.find_one({"nome": servizio}, {"_id": 0}) if servizio else None
+    image_rel = (svc_doc or {}).get("immagine")
+
     greeting = (
-        f"Ciao {nome}! 😊 Grazie per aver risposto alla nostra pubblicità"
-        + (f" \"{campagna}\"" if campagna else "")
-        + ". Sono l'assistente di SUPER GIRL. Posso farti qualche domanda per "
-          "aiutarti al meglio?"
+        f"Ciao {nome}, sono {ASSISTANT_NAME} di {BRAND_NAME} 💛\n"
+        f"Ho visto che sei interessata al trattamento {servizio or 'estetico'}. "
+        f"Ho ancora qualche posto disponibile per la prossima settimana: "
+        f"preferisci venire la mattina o il pomeriggio?"
     )
     await db.conversations.insert_one({
         "id": cid, "lead_id": lid, "ai_attiva": True, "stato": "nuovo_lead",
         "unread": 0, "operatore": None, "last_message": greeting,
         "last_message_at": now,
     })
+    # Foto prima/dopo del trattamento (solo all'inizio)
+    if image_rel:
+        await db.messages.insert_one({
+            "id": str(uuid.uuid4()), "conversation_id": cid, "sender": "ai",
+            "text": f"Trattamento {servizio}", "type": "image", "media_url": image_rel,
+            "created_at": now, "read": True,
+        })
     await db.messages.insert_one({
         "id": str(uuid.uuid4()), "conversation_id": cid, "sender": "ai",
-        "text": greeting, "created_at": now, "read": True,
+        "text": greeting, "type": "text", "created_at": now, "read": True,
     })
+    # Invio WhatsApp reale (se configurato): template con immagine
+    try:
+        await whatsapp_send_template(lead.get("telefono", ""), nome,
+                                     servizio or "trattamento", image_rel)
+    except Exception as e:  # noqa
+        logger.error(f"WA send on ingest failed: {e}")
     await db.lead_status_history.insert_one({
         "id": str(uuid.uuid4()), "lead_id": lid, "from_status": None,
         "to_status": "nuovo_lead", "changed_by": "meta", "created_at": now,
@@ -1136,6 +1173,310 @@ async def meta_simulate(body: SimLeadInput, user: dict = Depends(require_admin))
     """Simula la ricezione di un lead da Meta (test Fase 2, senza API reali)."""
     res = await ingest_meta_lead(body.dict())
     return res
+
+
+# ---------------------------------------------------------------------------
+# AI REALE (GPT-5.4 via Emergent) — assistente commerciale J'adore Mimì
+# ---------------------------------------------------------------------------
+async def build_ai_system_prompt(lead: dict) -> str:
+    kb = await db.knowledge_base.find_one({}, {"_id": 0}) or {}
+    servizio = lead.get("servizio") or "trattamento estetico"
+    svc = await db.services.find_one({"nome": servizio}, {"_id": 0}) or {}
+    return (
+        f"Sei {ASSISTANT_NAME}, assistente commerciale del centro estetico {BRAND_NAME}. "
+        f"Parli in italiano, con tono caldo, femminile, empatico e professionale, in stile WhatsApp: "
+        f"messaggi BREVI, naturali, mai muri di testo, una domanda alla volta.\n\n"
+        f"OBIETTIVO PRINCIPALE: portare gentilmente la cliente a fissare un appuntamento. "
+        f"Non sei un questionario: conversi in modo umano usando vendita conversazionale non aggressiva. "
+        f"Capisci il bisogno, rispondi alle domande, gestisci dubbi e obiezioni, valorizzi i benefici, "
+        f"e fai SEMPRE avanzare la conversazione. Termina quasi sempre con una domanda utile al passo "
+        f"successivo (bisogno -> interesse -> giorno -> mattina/pomeriggio -> orario -> appuntamento). "
+        f"NON chiudere con 'fammi sapere' o 'resto a disposizione': guida verso la prenotazione. "
+        f"Quando indichi un prezzo, prima capisci l'obiettivo della cliente, poi proponi la soluzione.\n\n"
+        f"REGOLA FONDAMENTALE: non inventare mai informazioni. Se non conosci una risposta, di' che "
+        f"farai intervenire lo staff.\n\n"
+        f"CONTESTO LEAD: nome={lead.get('nome')}, trattamento d'interesse={servizio}, "
+        f"sede={lead.get('sede') or 'da definire'}, campagna={lead.get('campagna')}.\n"
+        f"DETTAGLI TRATTAMENTO: {svc.get('descrizione','')} Prezzo: {svc.get('prezzo','')}. "
+        f"Promozione: {svc.get('promozione','')}. Info: {svc.get('info','')}.\n\n"
+        f"KNOWLEDGE BASE:\n"
+        f"Azienda: {kb.get('azienda','')}\nPrezzi: {kb.get('prezzi','')}\n"
+        f"Promozioni: {kb.get('promozioni','')}\nSedi: {kb.get('sedi','')}\n"
+        f"Orari: {kb.get('orari','')}\nFAQ: {kb.get('faq','')}\n"
+        f"Obiezioni: {kb.get('obiezioni','')}\nPagamenti: {kb.get('pagamenti','')}\n"
+        f"Da NON comunicare: {kb.get('non_comunicare','')}\n"
+    )
+
+
+async def ai_generate_reply(conv: dict, lead: dict) -> str:
+    """Genera la prossima risposta commerciale dell'AI dato lo storico chat."""
+    msgs = await db.messages.find(
+        {"conversation_id": conv["id"]}, {"_id": 0}).sort("created_at", 1).to_list(60)
+    transcript = "\n".join(
+        f"[{'Cliente' if m['sender']=='cliente' else ASSISTANT_NAME}]: {m['text']}"
+        for m in msgs if m.get("type", "text") == "text")
+    system = await build_ai_system_prompt(lead)
+    prompt = (
+        f"Conversazione WhatsApp finora:\n{transcript}\n\n"
+        f"Scrivi SOLO il prossimo messaggio di {ASSISTANT_NAME} alla cliente. "
+        f"Breve, naturale, una domanda sola, orientato a far avanzare verso l'appuntamento."
+    )
+    try:
+        chat = LlmChat(api_key=EMERGENT_LLM_KEY, session_id=conv["id"],
+                       system_message=system).with_model(AI_PROVIDER, AI_MODEL)
+        reply = await chat.send_message(UserMessage(text=prompt))
+        return (reply or "").strip() or "Certo! Dimmi pure, come posso aiutarti? 😊"
+    except Exception as e:  # noqa
+        logger.error(f"AI error: {e}")
+        return ("Grazie del tuo messaggio! Per aiutarti al meglio, qual è il risultato "
+                "principale che vorresti ottenere? 😊")
+
+
+# ---------------------------------------------------------------------------
+# OBJECT STORAGE — immagini prima/dopo dei trattamenti
+# ---------------------------------------------------------------------------
+def _init_storage():
+    global _storage_key
+    if _storage_key:
+        return _storage_key
+    r = requests.post(f"{STORAGE_URL}/init", json={"emergent_key": EMERGENT_LLM_KEY}, timeout=30)
+    r.raise_for_status()
+    _storage_key = r.json()["storage_key"]
+    return _storage_key
+
+
+def _put_object(path: str, data: bytes, ct: str):
+    key = _init_storage()
+    r = requests.put(f"{STORAGE_URL}/objects/{path}",
+                     headers={"X-Storage-Key": key, "Content-Type": ct},
+                     data=data, timeout=120)
+    r.raise_for_status()
+    return r.json()
+
+
+def _get_object(path: str):
+    key = _init_storage()
+    r = requests.get(f"{STORAGE_URL}/objects/{path}",
+                     headers={"X-Storage-Key": key}, timeout=60)
+    r.raise_for_status()
+    return r.content, r.headers.get("Content-Type", "application/octet-stream")
+
+
+@api.post("/upload")
+async def upload_image(file: UploadFile = File(...), user: dict = Depends(require_admin)):
+    ext = (file.filename or "img.jpg").rsplit(".", 1)[-1].lower()
+    if ext not in ("jpg", "jpeg", "png", "webp"):
+        raise HTTPException(400, "Formato immagine non supportato")
+    data = await file.read()
+    if len(data) > 8 * 1024 * 1024:
+        raise HTTPException(400, "Immagine troppo grande (max 8MB)")
+    path = f"supergirl/uploads/{user['id']}/{uuid.uuid4()}.{ext}"
+    ct = file.content_type or "image/jpeg"
+    await run_in_threadpool(_put_object, path, data, ct)
+    await db.uploads.insert_one({"path": path, "owner_id": user["id"],
+                                 "created_at": iso(now_utc())})
+    return {"path": path, "url": f"/api/files/{path}"}
+
+
+@api.get("/files/{path:path}")
+async def serve_file(path: str):
+    try:
+        content, ct = await run_in_threadpool(_get_object, path)
+    except Exception:
+        raise HTTPException(404, "File non trovato")
+    return Response(content=content, media_type=ct,
+                    headers={"Cache-Control": "public, max-age=86400"})
+
+
+# ---------------------------------------------------------------------------
+# WHATSAPP BUSINESS CLOUD API (Fase 3) — config in DB, editabile da Admin
+# ---------------------------------------------------------------------------
+WA_ENV = {
+    "phone_number_id": os.environ.get("WHATSAPP_PHONE_NUMBER_ID", "REPLACE_ME"),
+    "waba_id": os.environ.get("WHATSAPP_WABA_ID", "REPLACE_ME"),
+    "token": os.environ.get("WHATSAPP_TOKEN", "REPLACE_ME"),
+    "app_secret": os.environ.get("WHATSAPP_APP_SECRET", "REPLACE_ME"),
+    "verify_token": os.environ.get("WHATSAPP_VERIFY_TOKEN", ""),
+    "template_name": os.environ.get("WHATSAPP_TEMPLATE_NAME", "nuovo_lead_foto"),
+    "template_language": os.environ.get("WHATSAPP_TEMPLATE_LANGUAGE", "it"),
+    "numero": "",
+}
+
+
+async def get_wa_config() -> dict:
+    cfg = await db.integration_config.find_one({"key": "whatsapp"}, {"_id": 0}) or {}
+    out = {}
+    for k, default in WA_ENV.items():
+        val = cfg.get(k)
+        out[k] = val if (val not in (None, "")) else default
+    return out
+
+
+def wa_is_configured(cfg: dict) -> bool:
+    return all(cfg.get(k) and cfg.get(k) != "REPLACE_ME"
+               for k in ("phone_number_id", "token"))
+
+
+async def whatsapp_send_text(to: str, body: str):
+    cfg = await get_wa_config()
+    if not wa_is_configured(cfg) or not to:
+        return {"skipped": True}
+    url = f"https://graph.facebook.com/{META_API_VERSION}/{cfg['phone_number_id']}/messages"
+    payload = {"messaging_product": "whatsapp", "recipient_type": "individual",
+               "to": to, "type": "text", "text": {"preview_url": False, "body": body}}
+    async with httpx.AsyncClient(timeout=20) as c:
+        r = await c.post(url, headers={"Authorization": f"Bearer {cfg['token']}"}, json=payload)
+    if r.is_error:
+        logger.error(f"WA text error: {r.text}")
+    return r.json() if not r.is_error else {"error": r.text}
+
+
+async def whatsapp_send_template(to: str, nome: str, servizio: str, image_link: Optional[str]):
+    cfg = await get_wa_config()
+    if not wa_is_configured(cfg) or not to:
+        return {"skipped": True}
+    components = []
+    if image_link:
+        if image_link.startswith("/"):
+            base = (os.environ.get("PUBLIC_BASE_URL") or "").rstrip("/")
+            image_link = f"{base}{image_link}" if base else image_link
+        components.append({"type": "header", "parameters": [
+            {"type": "image", "image": {"link": image_link}}]})
+    components.append({"type": "body", "parameters": [
+        {"type": "text", "parameter_name": "name", "text": nome},
+        {"type": "text", "parameter_name": "service", "text": servizio}]})
+    payload = {"messaging_product": "whatsapp", "recipient_type": "individual",
+               "to": to, "type": "template",
+               "template": {"name": cfg["template_name"],
+                            "language": {"code": cfg["template_language"]},
+                            "components": components}}
+    url = f"https://graph.facebook.com/{META_API_VERSION}/{cfg['phone_number_id']}/messages"
+    async with httpx.AsyncClient(timeout=20) as c:
+        r = await c.post(url, headers={"Authorization": f"Bearer {cfg['token']}"}, json=payload)
+    if r.is_error:
+        logger.error(f"WA template error: {r.text}")
+    return r.json() if not r.is_error else {"error": r.text}
+
+
+@api.get("/integrations/whatsapp/webhook", response_class=PlainTextResponse)
+async def wa_verify(request: Request):
+    cfg = await get_wa_config()
+    p = request.query_params
+    if p.get("hub.mode") == "subscribe" and cfg.get("verify_token") and hmac.compare_digest(
+            p.get("hub.verify_token") or "", cfg["verify_token"]):
+        return p.get("hub.challenge") or ""
+    raise HTTPException(status_code=403, detail="Verifica webhook fallita")
+
+
+@api.post("/integrations/whatsapp/webhook")
+async def wa_webhook(request: Request):
+    cfg = await get_wa_config()
+    raw = await request.body()
+    sig = request.headers.get("x-hub-signature-256")
+    secret = cfg.get("app_secret")
+    if secret and secret != "REPLACE_ME":
+        expected = "sha256=" + hmac.new(secret.encode(), raw, hashlib.sha256).hexdigest()
+        if not sig or not hmac.compare_digest(expected, sig):
+            raise HTTPException(status_code=403, detail="Firma non valida")
+    payload = await request.json()
+    for entry in payload.get("entry", []):
+        for change in entry.get("changes", []):
+            value = change.get("value", {})
+            for m in value.get("messages", []):
+                await handle_inbound_wa(m, value)
+            for s in value.get("statuses", []):
+                await db.messages.update_one(
+                    {"wa_id": s.get("id")},
+                    {"$set": {"wa_status": s.get("status")}})
+    return {"ok": True}
+
+
+async def handle_inbound_wa(m: dict, value: dict):
+    wa_from = m.get("from")
+    text = (m.get("text") or {}).get("body", "")
+    lead = await db.leads.find_one(
+        {"telefono": {"$regex": wa_from[-9:] if wa_from else "____"}}, {"_id": 0})
+    if not lead:
+        return
+    conv = await db.conversations.find_one({"lead_id": lead["id"]}, {"_id": 0})
+    if not conv:
+        return
+    await db.messages.insert_one({
+        "id": str(uuid.uuid4()), "conversation_id": conv["id"], "sender": "cliente",
+        "text": text, "type": "text", "created_at": iso(now_utc()), "read": False,
+        "wa_id": m.get("id")})
+    await cancel_followups(lead["id"])
+    await db.conversations.update_one({"id": conv["id"]}, {"$set": {
+        "last_message": text, "last_message_at": iso(now_utc()),
+        "unread": conv.get("unread", 0) + 1}})
+    if not conv.get("ai_attiva", True):
+        return
+    motivo, ai_msg = detect_handoff(text)
+    if motivo:
+        await do_handoff(lead, conv, motivo, ai_msg)
+        await whatsapp_send_text(wa_from, ai_msg)
+    else:
+        reply = await ai_generate_reply(conv, lead)
+        await db.messages.insert_one({
+            "id": str(uuid.uuid4()), "conversation_id": conv["id"], "sender": "ai",
+            "text": reply, "type": "text", "created_at": iso(now_utc()), "read": True})
+        await db.conversations.update_one({"id": conv["id"]}, {"$set": {
+            "last_message": reply, "last_message_at": iso(now_utc()),
+            "stato": "in_attesa"}})
+        await db.leads.update_one({"id": lead["id"]}, {"$set": {
+            "stato_pipeline": "in_attesa", "ultimo_contatto": iso(now_utc())}})
+        await whatsapp_send_text(wa_from, reply)
+
+
+class WaConfigInput(BaseModel):
+    numero: Optional[str] = None
+    phone_number_id: Optional[str] = None
+    waba_id: Optional[str] = None
+    token: Optional[str] = None
+    app_secret: Optional[str] = None
+    verify_token: Optional[str] = None
+    template_name: Optional[str] = None
+    template_language: Optional[str] = None
+
+
+def _mask(v: Optional[str]) -> Optional[str]:
+    if not v or v == "REPLACE_ME":
+        return None
+    return f"••••{v[-4:]}" if len(v) > 4 else "••••"
+
+
+@api.get("/integrations/whatsapp/config")
+async def wa_get_config(user: dict = Depends(require_admin)):
+    cfg = await get_wa_config()
+    return {
+        "numero": cfg.get("numero") or "",
+        "phone_number_id": cfg.get("phone_number_id") if cfg.get("phone_number_id") != "REPLACE_ME" else "",
+        "waba_id": cfg.get("waba_id") if cfg.get("waba_id") != "REPLACE_ME" else "",
+        "template_name": cfg.get("template_name"),
+        "template_language": cfg.get("template_language"),
+        "verify_token": cfg.get("verify_token"),
+        "token_masked": _mask(cfg.get("token")),
+        "app_secret_masked": _mask(cfg.get("app_secret")),
+        "configured": wa_is_configured(cfg),
+        "webhook_path": "/api/integrations/whatsapp/webhook",
+    }
+
+
+@api.patch("/integrations/whatsapp/config")
+async def wa_set_config(body: WaConfigInput, user: dict = Depends(require_admin)):
+    updates = {k: v for k, v in body.dict().items() if v is not None and v != ""}
+    if updates:
+        await db.integration_config.update_one(
+            {"key": "whatsapp"}, {"$set": {**updates, "key": "whatsapp"}}, upsert=True)
+    return await wa_get_config(user)
+
+
+@api.get("/integrations/whatsapp/status")
+async def wa_status(user: dict = Depends(current_user)):
+    cfg = await get_wa_config()
+    return {"configured": wa_is_configured(cfg),
+            "numero": cfg.get("numero") or "",
+            "template_name": cfg.get("template_name")}
 
 
 # ---------------------------------------------------------------------------

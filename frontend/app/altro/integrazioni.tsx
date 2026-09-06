@@ -10,8 +10,8 @@ import { Loading } from "@/src/components/ui";
 
 const META = {
   meta: { icon: "facebook", desc: "Ricezione automatica dei lead dai moduli Meta Lead Ads.", route: "/altro/meta" },
-  whatsapp: { icon: "message-circle", desc: "Invio e ricezione messaggi via WhatsApp Business Cloud API ufficiale." },
-  ai: { icon: "cpu", desc: "Provider AI reale per conversazione, qualificazione e riassunti." },
+  whatsapp: { icon: "message-circle", desc: "Numero, credenziali e template. Sostituibile dalle impostazioni.", route: "/altro/whatsapp" },
+  ai: { icon: "cpu", desc: "AI commerciale reale (GPT-5.4) attiva sulle conversazioni." },
 };
 
 export default function Integrazioni() {

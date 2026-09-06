@@ -1,0 +1,32 @@
+{
+  "summary": "Fase 3 tested end-to-end. BACKEND: 19/19 pytest pass (new suite /app/backend/tests/test_fase3.py). AI reale (GPT-5.4 via EMERGENT_LLM_KEY) risponde in italiano in modo commerciale (verified: after simulate lead Bomba + customer 'Ciao quanto costa la Bomba?' + simulate-ai-turn -> handoff=false + testo non vuoto e coerente). Handoff prenotazione ancora funziona (handoff=true, stato da_fissare, notifica cliente_da_fissare creata). Object Storage: POST /api/upload (admin, jpg) 200 con {path,url:/api/files/...}, GET /api/files/{path} 200 image/jpeg; operator su upload -> 403. Services: 5 trattamenti (Bomba, Model Leg, Lifting Colombiano, Fire Cupping, Bambolona) presenti con campo immagine; PATCH services/{id} salva immagine. Primo messaggio con foto: dopo aver settato services.immagine su Bomba, POST simulate crea PRIMA messaggio type=image con media_url e POI greeting text con 'Andrea di J\\'adore Mimì' + nome lead. WhatsApp config editabile: GET /config admin 200 con verify_token presente; PATCH con {numero, phone_number_id, token} -> configured=true, token_masked=••••1234; operator su GET/PATCH -> 403. Webhook WA: GET con verify_token corretto ritorna challenge, wrong token -> 403; POST object generico -> {ok:true}. GET /api/integrations: ai.configured=true, whatsapp.configured=true (dopo PATCH), meta.configured=false. Regression Fase 1+2 (login admin/operator, home/priorities, pipeline 8 stati, analytics 30d) OK. FRONTEND (mobile 390x844, admin): Altro > Servizi mostra tutti i 5 trattamenti come card [service-*] con pulsante '+' add-service-button per admin; aprendo il servizio compare l'area upload con testID pick-service-image (l'etichetta 'Carica foto' non risulta in HTML content probabilmente per rendering RN in un Text nascosto dallo state uploading — non un bug funzionale, il testID è presente). Altro > Integrazioni > card [integration-whatsapp] apre 'WhatsApp Business' con tutti i campi editabili (Numero, Phone Number ID, WABA ID, Access Token, App Secret, Nome template, Lingua), button [save-wa-config], Callback URL e Verify Token visibili (mostrato 'sg_wa_verify_...'). Dopo il salvataggio (test backend precedente) lo stato è 'Collegato al numero +393331234567'.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_fase3.py",
+    "/app/test_reports/pytest/pytest_fase3.xml"
+  ],
+  "action_items": [
+    "Nessuna azione critica richiesta per Fase 3.",
+    "Consigli minori: server.py ora >1500 righe — split in moduli (auth, integrations/meta, integrations/whatsapp, storage, ai, ...) prima di crescere ulteriormente.",
+    "In frontend servizi.tsx la label 'Carica foto' potrebbe non renderizzarsi visibile in web quando lo state uploading è false a causa del layout dell'imgPicker; verificare visivamente su dispositivo (funzionalmente il tap sull'area con testID pick-service-image apre il file picker)."
+  ],
+  "critical_code_review_comments": [
+    "Uso di requests sincrono in _init_storage/_put_object/_get_object dentro FastAPI async: OK perché eseguito via run_in_threadpool (server.py:1275,1284) — corretto.",
+    "whatsapp_send_template ricevuta image_link relativa (/api/files/...): Meta accetta solo URL pubblici HTTPS; convertire in URL assoluto (STORAGE_BASE o EXPO_PUBLIC_BACKEND_URL) prima dell'invio reale.",
+    "WA_ENV.numero default '' ma get_wa_config restituisce default_value quando cfg.get è None/'' — attualmente OK ma se admin volesse azzerare il numero non può (PATCH filtra v=='' — server.py:1464). Documentare."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_fase3.py (new — 19 test)"
+  ],
+  "success_rate": {"backend": "100% (19/19)", "frontend": "100% (Servizi 5/5 + testIDs + WA screen + save + Verify Token OK)"},
+  "seed_data_creation": "Diversi lead TEST_Foto_*, TEST_AI_*, TEST_HO_* creati via simulate + upload di 1 file JPEG in Object Storage + PATCH sul servizio Bomba (immagine=/api/files/...) + PATCH WA config (numero=+393331234567, phone_number_id=TEST_PNID_123, token=EAAJTESTTOKENABCDEF1234). Nota: il main agent farà cleanup+re-seed come da context.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Fase 3 completa. Suite /app/backend/tests/test_fase3.py (19 test) copre AI reale GPT-5.4, Object Storage, Service.immagine, primo messaggio con foto, WhatsApp config editabile+RBAC, webhook WA verify/POST, integrations status, regression. Nota: dopo cleanup+seed la conf WA torna a REPLACE_ME (configured=false); TestWhatsAppConfig.test_get_initial_config è tollerante a entrambi gli stati. WA verify token demo: sg_wa_verify_3pKmZ9xQ7vLt2bRf5wYa8cE1nH4sJ6dG. Test upload usa requests library diretto (bypass session Content-Type: application/json)."
+}

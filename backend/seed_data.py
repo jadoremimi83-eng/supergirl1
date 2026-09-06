@@ -89,30 +89,43 @@ async def seed_database(db):
 
     # --------------------------------------------------------------- SERVICES
     services = [
-        {"id": str(uuid.uuid4()), "nome": "Trattamento Corpo Rimodellante",
-         "descrizione": "Percorso rimodellante per addome, fianchi e gambe.",
-         "prezzo": "€120 a seduta · Pacchetto 5 sedute €499",
-         "promozione": "Prima consulenza gratuita",
-         "info": "Risultati visibili dopo il ciclo completo.",
-         "faq": "Quante sedute servono? In media 5-8 sedute."},
-        {"id": str(uuid.uuid4()), "nome": "Pulizia Viso Profonda",
-         "descrizione": "Trattamento viso purificante e illuminante.",
-         "prezzo": "€70 a seduta", "promozione": "",
-         "info": "Consigliata una volta al mese.",
-         "faq": "È adatta a pelli sensibili? Sì, personalizziamo il trattamento."},
-        {"id": str(uuid.uuid4()), "nome": "Laser Epilazione Definitiva",
-         "descrizione": "Epilazione con laser diodo di ultima generazione.",
-         "prezzo": "Da €50 a zona · Pacchetti dedicati",
-         "promozione": "Pacchetto ascelle + inguine €399",
-         "info": "Servono 6-8 sedute per risultati definitivi.",
-         "faq": "È doloroso? Sensazione minima grazie al raffreddamento."},
-        {"id": str(uuid.uuid4()), "nome": "Medicina Estetica Viso",
-         "descrizione": "Filler, biorivitalizzazione e trattamenti anti-età.",
-         "prezzo": "Su valutazione medica",
-         "promozione": "", "info": "Visita medica obbligatoria.",
-         "faq": "Chi esegue i trattamenti? Personale medico specializzato."},
+        {"id": str(uuid.uuid4()), "nome": "Bomba",
+         "descrizione": "Trattamento corpo d'urto anti-cellulite e drenante, rimodella e sgonfia.",
+         "prezzo": "€90 a seduta · Pacchetto 5 sedute €399",
+         "promozione": "Prima seduta di prova a €49",
+         "info": "Ideale per cellulite, ritenzione e girovita. Ciclo consigliato 5-8 sedute.",
+         "faq": "Fa male? No, è drenante e rilassante.", "immagine": ""},
+        {"id": str(uuid.uuid4()), "nome": "Model Leg",
+         "descrizione": "Trattamento gambe leggere: drena, sgonfia e tonifica.",
+         "prezzo": "€80 a seduta · Pacchetto 5 €359",
+         "promozione": "", "info": "Perfetto per gambe gonfie e pesanti.",
+         "faq": "Ogni quanto? 1-2 volte a settimana.", "immagine": ""},
+        {"id": str(uuid.uuid4()), "nome": "Lifting Colombiano",
+         "descrizione": "Massaggio rassodante e rimodellante corpo effetto lifting.",
+         "prezzo": "€100 a seduta",
+         "promozione": "Pacchetto 6 sedute €499", "info": "Tonifica glutei e silhouette.",
+         "faq": "Risultati? Visibili dal ciclo completo.", "immagine": ""},
+        {"id": str(uuid.uuid4()), "nome": "Fire Cupping",
+         "descrizione": "Coppettazione a caldo: drena, decontrae e attiva la circolazione.",
+         "prezzo": "€70 a seduta",
+         "promozione": "", "info": "Ottimo su schiena e zone con ritenzione.",
+         "faq": "Lascia segni? Un lieve arrossamento temporaneo.", "immagine": ""},
+        {"id": str(uuid.uuid4()), "nome": "Bambolona",
+         "descrizione": "Trattamento viso illuminante e rimpolpante effetto bambola.",
+         "prezzo": "€75 a seduta",
+         "promozione": "Prima consulenza viso gratuita",
+         "info": "Pelle luminosa e compatta.", "faq": "Adatto a pelli sensibili? Sì.",
+         "immagine": ""},
     ]
     await db.services.insert_many(services)
+
+    # Alias: mappa i vecchi nomi demo ai trattamenti reali (per i lead seed)
+    svc = {
+        "Trattamento Corpo Rimodellante": "Bomba",
+        "Pulizia Viso Profonda": "Bambolona",
+        "Laser Epilazione Definitiva": "Model Leg",
+        "Medicina Estetica Viso": "Lifting Colombiano",
+    }
 
     # --------------------------------------------------------------- CAMPAIGNS
     campaigns = [
@@ -131,10 +144,12 @@ async def seed_database(db):
     # --------------------------------------------------------- KNOWLEDGE BASE
     await db.knowledge_base.insert_one({
         "id": str(uuid.uuid4()),
-        "azienda": "SUPER GIRL è un centro di estetica avanzata con sedi a Milano "
-                   "e Roma. Offriamo trattamenti corpo, viso, laser e medicina estetica.",
-        "servizi": "Trattamento Corpo Rimodellante, Pulizia Viso Profonda, "
-                   "Laser Epilazione Definitiva, Medicina Estetica Viso.",
+        "azienda": "J'adore Mimì è un centro di estetica avanzata con sedi a Milano "
+                   "e Roma. Trattamenti corpo e viso: Bomba, Model Leg, Lifting "
+                   "Colombiano, Fire Cupping, Bambolona.",
+        "servizi": "Bomba (anti-cellulite/drenante), Model Leg (gambe leggere), "
+                   "Lifting Colombiano (rassodante corpo), Fire Cupping (coppettazione), "
+                   "Bambolona (viso illuminante).",
         "prezzi": "Trattamento Corpo €120/seduta (pacchetto 5 a €499). "
                   "Pulizia Viso €70. Laser da €50 a zona. "
                   "Medicina estetica su valutazione medica.",
@@ -189,7 +204,6 @@ async def seed_database(db):
 
     # ------------------------------------------------------------------ LEADS
     N = now_utc()
-    svc = {s["nome"]: s["nome"] for s in services}
 
     def conv_id():
         return str(uuid.uuid4())

@@ -13,6 +13,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
+import { Image } from "expo-image";
 import { api } from "@/src/api";
 import { colors, spacing, radius, type, font, stageOf } from "@/src/theme";
 import { Avatar, AiBadge, Loading, Sheet, GoldButton } from "@/src/components/ui";
@@ -111,6 +112,17 @@ export default function Conversation() {
   const renderMsg = ({ item }: { item: Msg }) => {
     const isCustomer = item.sender === "cliente";
     const isAi = item.sender === "ai";
+    if ((item as any).type === "image" && (item as any).media_url) {
+      const uri = `${process.env.EXPO_PUBLIC_BACKEND_URL}${(item as any).media_url}`;
+      return (
+        <View style={[styles.msgRow, styles.right]}>
+          <View style={styles.imageBubble}>
+            <Image source={{ uri }} style={styles.chatImage} contentFit="cover" transition={200} />
+            <Text style={styles.imgCaption}>{item.text}</Text>
+          </View>
+        </View>
+      );
+    }
     return (
       <View style={[styles.msgRow, isCustomer ? styles.left : styles.right]}>
         <View
@@ -314,6 +326,9 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 4,
   },
   bubbleOp: { backgroundColor: colors.surfaceInverse, borderTopRightRadius: 4 },
+  imageBubble: { maxWidth: "82%", borderRadius: radius.md, overflow: "hidden", backgroundColor: colors.brandTertiary, borderWidth: 1, borderColor: colors.borderStrong },
+  chatImage: { width: 240, height: 180, backgroundColor: colors.surfaceTertiary },
+  imgCaption: { color: colors.onBrandTertiary, fontSize: 11, fontWeight: "700", padding: spacing.sm },
   senderTag: { fontSize: 9.5, fontWeight: "800", letterSpacing: 0.6, marginBottom: 2 },
   msgText: { color: colors.onSurface, fontSize: 14.5, lineHeight: 20 },
   msgTime: { color: colors.onSurfaceTertiary, fontSize: 10, alignSelf: "flex-end", marginTop: 3 },

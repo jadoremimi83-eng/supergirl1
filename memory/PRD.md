@@ -57,5 +57,14 @@ FASE 1 = demo completa con dati simulati, senza integrazioni reali (no Meta, no 
 - DA FARE per attivazione reale: l'utente fornisce App ID, App Secret, Page Access Token, Page ID → inserimento in `.env` → configurazione webhook su Meta (Callback URL + Verify Token, campo `leadgen`) → verifica Business + App Review `leads_retrieval`.
 
 
+## Fase 3 — WhatsApp + AI reale + Immagini trattamenti (2026-06)
+- **AI commerciale reale**: GPT-5.4 via Emergent universal key (`EMERGENT_LLM_KEY`, `AI_MODEL`). `ai_generate_reply()` genera risposte brevi in italiano orientate alla prenotazione (bisogno→giorno→orario→appuntamento), usate sia da `simulate-ai-turn` sia dal webhook WhatsApp inbound. Handoff su intenzione di prenotare invariato.
+- **Immagini trattamenti (Object Storage)**: `POST /api/upload` (admin) → Emergent Object Storage; `GET /api/files/{path}` pubblico. Campo `services.immagine`. Upload/anteprima dalla schermata Servizi (expo-image-picker). Trattamenti J'adore Mimì: Bomba, Model Leg, Lifting Colombiano, Fire Cupping, Bambolona.
+- **Primo messaggio**: all'ingresso lead, foto prima/dopo del trattamento (se impostata) + copy "Ciao {nome}, sono Andrea di J'adore Mimì …" (mattina/pomeriggio). Foto solo all'inizio.
+- **WhatsApp Business Cloud API**: credenziali EDITABILI da Admin e salvate nel DB (`integration_config` key=whatsapp) → numero sostituibile senza rebuild. Endpoint config GET/PATCH (token/app_secret mascherati), webhook verify/receive/status, invio `whatsapp_send_template` (immagine header + {name}/{service}) e `whatsapp_send_text` (finestra 24h). Attivi solo se configurato; URL immagine reso assoluto via `PUBLIC_BASE_URL`.
+- Frontend: schermata `/altro/whatsapp` (WhatsApp Business Settings) + immagini nei Servizi + bolle immagine in chat.
+- Env aggiunti: EMERGENT_LLM_KEY, AI_MODEL, AI_PROVIDER, WHATSAPP_* , PUBLIC_BASE_URL. Tutti i segreti lato server; le credenziali WhatsApp editabili sono in DB (mai nel codice).
+- Testato: 19/19 backend + flusso frontend. DA FARE attivazione reale: inserire credenziali WhatsApp (numero personale per test → poi Business) da Impostazioni, creare/approvare template immagine su Meta, e per Meta Lead Ads i token reali.
+
 ## Credenziali demo
 admin@supergirl.app / Admin123! · operatore@supergirl.app / Operatore123!
