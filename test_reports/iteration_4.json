@@ -1,0 +1,23 @@
+{
+  "summary": "Frontend-only bug-fix verification for WhatsApp Business screen infinite-loading. Both Admin and Operator flows tested end-to-end via mobile viewport (390x844) on the public preview URL. FIX VERIFIED: the screen now finishes loading in both roles - no infinite spinner. Admin sees all 7 editable fields + 'Salva credenziali' (save-wa-config) + Webhook section. Operator receives 403 on GET /api/integrations/whatsapp/config, catch-block sets fallback cfg + setLoading(false), and the screen opens showing 'Non ancora collegato', the readonly message 'Solo gli Admin possono modificare le credenziali WhatsApp', and the Webhook section (Callback URL + Verify Token) - no crash. The integration-whatsapp card is tappable and correctly navigates to /altro/whatsapp for both roles.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": ["/tmp/admin_integrazioni.png", "/tmp/admin_wa.png", "/tmp/operator_integrazioni.png", "/tmp/operator_wa.png"],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Verify Token CopyRow may pass empty string when cfg is the fallback for operator (cfg.verify_token = ''). Copy still works but shows an empty value row - minor UX only.",
+    "In fallback cfg the verify_token is empty for operators - if desired, backend could expose a public/read-only endpoint returning webhook meta (callback + verify token) so operators see the actual values."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "not tested (frontend-only request)", "frontend": "100% (2/2 scenarios: admin + operator)"},
+  "seed_data_creation": "None. Used existing seeded users admin@supergirl.app and operatore@supergirl.app.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Login POSTs are handled via inputs (email/password) then a 'Accedi' button. After login users land on /priorities. Direct navigation to /altro/integrazioni works (Expo Router). The WhatsApp card has testID 'integration-whatsapp'. The WhatsApp screen (/altro/whatsapp) uses testID 'save-wa-config' only for admins. Backend GET /api/integrations/whatsapp/config returns 403 for operators - this is expected and the frontend catch-block handles it via a fallback cfg. Do not test real WhatsApp send flows - integration is not configured.",
+  "rca_of_issue": "Original bug: in /app/frontend/app/altro/whatsapp.tsx, load() awaited api.get('/integrations/whatsapp/config'). For non-admin users backend returned 403, the promise rejected, cfg stayed null, and the render guard 'if (loading || !cfg)' kept showing <Loading/> forever because setLoading(false) was never reached. Fix (verified working): the catch block now sets a fallback cfg object (configured=false, empty fields, default template_name/language) AND setLoading(false) runs unconditionally after the try/catch. This allows the screen to render for operators showing 'Non ancora collegato' + the readonly notice, and for admins to still see the full form when the request succeeds. Reproduction (pre-fix): login as operator -> /altro/integrazioni -> tap WhatsApp card -> infinite spinner. Post-fix: same steps -> screen opens with fallback state (verified in this iteration)."
+}

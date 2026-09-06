@@ -33,7 +33,19 @@ export default function WhatsAppSettings() {
         waba_id: c.waba_id || "", template_name: c.template_name || "",
         template_language: c.template_language || "it", token: "", app_secret: "",
       });
-    } catch {}
+    } catch {
+      // Fallback (es. Operatore senza permessi): la schermata resta usabile
+      setCfg({
+        configured: false, numero: "", phone_number_id: "", waba_id: "",
+        template_name: "nuovo_lead_foto", template_language: "it",
+        verify_token: "", token_masked: null, app_secret_masked: null,
+      });
+      setForm({
+        numero: "", phone_number_id: "", waba_id: "",
+        template_name: "nuovo_lead_foto", template_language: "it",
+        token: "", app_secret: "",
+      });
+    }
     setLoading(false);
   }, []);
   useFocusEffect(useCallback(() => { load(); }, [load]));
@@ -62,7 +74,6 @@ export default function WhatsAppSettings() {
   if (loading || !cfg) {
     return <View style={{ flex: 1, backgroundColor: colors.surface }}><SubHeader title="WhatsApp Business" /><Loading /></View>;
   }
-
   return (
     <View style={{ flex: 1, backgroundColor: colors.surface }}>
       <SubHeader title="WhatsApp Business" />
