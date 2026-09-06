@@ -15,6 +15,7 @@ import { api } from "@/src/api";
 import { useAuth } from "@/src/auth";
 import { colors, spacing, radius, type, font, tempOf } from "@/src/theme";
 import { Avatar, TempBadge, Loading, EmptyState } from "@/src/components/ui";
+import { useAssistant } from "@/src/useAssistant";
 import { waitingSince } from "@/src/time";
 
 type Priority = {
@@ -37,6 +38,7 @@ export default function Priorities() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { user } = useAuth();
+  const { assistant } = useAssistant();
   const [data, setData] = useState<{ da_fissare: Priority[]; total_leads: number; count: number } | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -63,9 +65,12 @@ export default function Priorities() {
         style={[styles.hero, { paddingTop: insets.top + spacing.lg }]}
       >
         <View style={styles.heroTop}>
-          <View>
-            <Text style={styles.brand}>SUPER GIRL</Text>
-            <Text style={styles.hello}>Ciao, {user?.name?.split(" ")[0] || "benvenuta"}</Text>
+          <View style={styles.brandBlock}>
+            <Avatar uri={assistant.avatarUri} name={assistant.name} size={46} position="top" />
+            <View>
+              <Text style={styles.brand}>SUPER GIRL</Text>
+              <Text style={styles.hello}>Ciao, {user?.name?.split(" ")[0] || "benvenuta"}</Text>
+            </View>
           </View>
           <Pressable
             testID="go-dashboard-button"
@@ -185,6 +190,7 @@ const styles = StyleSheet.create({
     borderBottomColor: colors.border,
   },
   heroTop: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  brandBlock: { flexDirection: "row", alignItems: "center", gap: spacing.md },
   brand: {
     fontFamily: font.display,
     fontSize: 26,

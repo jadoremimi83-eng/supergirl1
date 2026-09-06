@@ -4,6 +4,7 @@ import { useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
+import { Image } from "expo-image";
 import { api, uploadImage } from "@/src/api";
 import { useAuth } from "@/src/auth";
 import { useAssistant } from "@/src/useAssistant";
@@ -89,8 +90,17 @@ export default function Impostazioni() {
         {/* AI */}
         <SectionTitle>Assistente AI</SectionTitle>
         <View style={styles.card}>
+          {assistant.avatarUri ? (
+            <Image
+              source={{ uri: assistant.avatarUri }}
+              style={styles.assistantBanner}
+              contentFit="cover"
+              transition={200}
+              testID="assistant-banner"
+            />
+          ) : null}
           <View style={styles.assistantRow}>
-            <Avatar uri={assistant.avatarUri} name={assistant.name} size={56} />
+            <Avatar uri={assistant.avatarUri} name={assistant.name} size={56} position="top" />
             <View style={{ flex: 1 }}>
               <Text style={styles.assistantName}>{assistant.name}</Text>
               <Text style={styles.assistantRole}>Assistente commerciale · GPT-5.4</Text>
@@ -175,6 +185,7 @@ function NotifToggle({ label, value, onChange, disabled, k, last }: any) {
 const styles = StyleSheet.create({
   card: { backgroundColor: colors.surfaceSecondary, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, paddingHorizontal: spacing.lg, marginBottom: spacing.lg },
   assistantRow: { flexDirection: "row", alignItems: "center", gap: spacing.md, paddingVertical: spacing.md },
+  assistantBanner: { width: "100%", aspectRatio: 1, borderRadius: radius.sm, marginTop: spacing.md, backgroundColor: colors.surfaceTertiary },
   assistantName: { color: colors.onSurface, fontSize: type.lg, fontWeight: "700" },
   assistantRole: { color: colors.onSurfaceTertiary, fontSize: 12, marginTop: 2 },
   changePhoto: { flexDirection: "row", alignItems: "center", gap: 5, borderWidth: 1, borderColor: colors.borderStrong, borderRadius: radius.pill, paddingHorizontal: spacing.md, paddingVertical: 7 },

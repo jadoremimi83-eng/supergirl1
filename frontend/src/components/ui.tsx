@@ -19,10 +19,12 @@ export function Avatar({
   uri,
   name,
   size = 48,
+  position,
 }: {
   uri?: string | null;
   name?: string;
   size?: number;
+  position?: "top" | "center" | "bottom";
 }) {
   const initials = (name || "")
     .split(" ")
@@ -37,6 +39,7 @@ export function Avatar({
         source={{ uri }}
         style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: colors.surfaceTertiary }}
         contentFit="cover"
+        contentPosition={position || "center"}
         transition={200}
       />
     );
