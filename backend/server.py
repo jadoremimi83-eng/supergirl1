@@ -19,7 +19,7 @@ import bcrypt
 import httpx
 from fastapi import (FastAPI, APIRouter, Depends, HTTPException, status, Query,
                      Request, UploadFile, File)
-from fastapi.responses import PlainTextResponse, Response
+from fastapi.responses import PlainTextResponse, Response, HTMLResponse
 from fastapi.concurrency import run_in_threadpool
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from emergentintegrations.llm.chat import LlmChat, UserMessage
@@ -1361,6 +1361,39 @@ async def whatsapp_send_template(to: str, nome: str, servizio: str, image_link: 
     return r.json() if not r.is_error else {"error": r.text}
 
 
+def _mask_token(v: str) -> Optional[str]:
+    if not v:
+        return None
+    if len(v) <= 4:
+        return "•" * len(v)
+    return f"{v[:2]}…{v[-2:]}"
+
+
+async def _save_wa_debug(request: Request, p, received: str, status: int, challenge_returned):
+    h = request.headers
+    doc = {
+        "ts": now_utc(),
+        "mode": p.get("hub.mode"),
+        "challenge_received": p.get("hub.challenge"),
+        "challenge_returned": challenge_returned,
+        "status": status,
+        # segreti mai in chiaro: solo esito confronto + maschera + lunghezza
+        "token_matches_supergirl2026": (received == "supergirl2026"),
+        "token_masked": _mask_token(received),
+        "token_length": len(received),
+        "user_agent": h.get("user-agent"),
+        "x_forwarded_for": h.get("x-forwarded-for"),
+        "cf_connecting_ip": h.get("cf-connecting-ip"),
+        "x_real_ip": h.get("x-real-ip"),
+        "host": h.get("host"),
+        "query_keys": list(p.keys()),
+    }
+    try:
+        await db.wa_webhook_debug.insert_one(doc)
+    except Exception as e:
+        logger.error("wa_debug save failed: %s", e)
+
+
 @api.get("/integrations/whatsapp/webhook", response_class=PlainTextResponse)
 async def wa_verify(request: Request):
     cfg = await get_wa_config()
@@ -1374,11 +1407,23 @@ async def wa_verify(request: Request):
     expected = (cfg.get("verify_token") or "").strip()
     received = (p.get("hub.verify_token") or "").strip()
     if p.get("hub.mode") == "subscribe" and expected and hmac.compare_digest(received, expected):
-        logger.info("WA_WEBHOOK_GET -> 200 challenge=%r", p.get("hub.challenge"))
-        return p.get("hub.challenge") or ""
+        challenge = p.get("hub.challenge") or ""
+        logger.info("WA_WEBHOOK_GET -> 200 challenge=%r", challenge)
+        await _save_wa_debug(request, p, received, 200, challenge)
+        return challenge
     logger.info("WA_WEBHOOK_GET -> 403 (mode=%r expected_set=%s match=%s)",
                 p.get("hub.mode"), bool(expected), received == expected)
+    await _save_wa_debug(request, p, received, 403, None)
     raise HTTPException(status_code=403, detail="Verifica webhook fallita")
+
+
+@api.get("/integrations/whatsapp/webhook-debug")
+async def wa_webhook_debug(user: dict = Depends(require_admin)):
+    docs = await db.wa_webhook_debug.find({}, {"_id": 0}).sort("ts", -1).to_list(20)
+    for d in docs:
+        if isinstance(d.get("ts"), datetime):
+            d["ts"] = iso(d["ts"])
+    return {"count": len(docs), "attempts": docs}
 
 
 @api.post("/integrations/whatsapp/webhook")
@@ -1387,11 +1432,34 @@ async def wa_webhook(request: Request):
     raw = await request.body()
     sig = request.headers.get("x-hub-signature-256")
     secret = cfg.get("app_secret")
+    sig_valid = None
     if secret and secret != "REPLACE_ME":
         expected = "sha256=" + hmac.new(secret.encode(), raw, hashlib.sha256).hexdigest()
-        if not sig or not hmac.compare_digest(expected, sig):
-            raise HTTPException(status_code=403, detail="Firma non valida")
-    payload = await request.json()
+        sig_valid = bool(sig and hmac.compare_digest(expected, sig))
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    try:
+        froms, texts, statuses = [], [], []
+        for entry in payload.get("entry", []):
+            for change in entry.get("changes", []):
+                value = change.get("value", {})
+                for m in value.get("messages", []):
+                    froms.append(m.get("from"))
+                    texts.append((m.get("text") or {}).get("body"))
+                for s in value.get("statuses", []):
+                    statuses.append(s.get("status"))
+        logger.info("WA_WEBHOOK_POST | sig_present=%s sig_valid=%s from=%s texts=%s statuses=%s",
+                    bool(sig), sig_valid, froms, texts, statuses)
+        await db.wa_webhook_debug.insert_one({
+            "ts": now_utc(), "kind": "inbound_post", "sig_present": bool(sig),
+            "sig_valid": sig_valid, "from": froms, "texts": texts, "statuses": statuses,
+        })
+    except Exception as e:
+        logger.error("wa inbound debug failed: %s", e)
+    if sig_valid is False:
+        raise HTTPException(status_code=403, detail="Firma non valida")
     for entry in payload.get("entry", []):
         for change in entry.get("changes", []):
             value = change.get("value", {})
@@ -1404,16 +1472,48 @@ async def wa_webhook(request: Request):
     return {"ok": True}
 
 
+async def create_inbound_lead(wa_from: str, value: dict):
+    """Crea un lead + conversazione per un contatto WhatsApp organico (numero non ancora lead)."""
+    now = iso(now_utc())
+    contacts = value.get("contacts", [])
+    profile_name = ""
+    if contacts:
+        profile_name = (contacts[0].get("profile") or {}).get("name") or ""
+    tel = wa_from if wa_from.startswith("+") else "+" + wa_from
+    lid = str(uuid.uuid4())
+    lead = {
+        "id": lid, "nome": profile_name or "Cliente WhatsApp", "cognome": "",
+        "telefono": tel, "email": "",
+        "servizio": "", "sede": "",
+        "campagna": "WhatsApp Diretto", "inserzione": "Contatto Organico",
+        "piattaforma": "WhatsApp",
+        "ig_username": None, "ig_display_name": None, "foto_profilo": None,
+        "data_acquisizione": now, "ultimo_contatto": now,
+        "stato_pipeline": "ai_conversazione", "temperature": "da_coltivare",
+        "operatore_assegnato": None, "esigenza": "", "obiezioni": "",
+        "note_staff": "", "ai_summary": None, "handoff_at": None,
+        "leadgen_id": None, "origine": "whatsapp_organico",
+    }
+    await db.leads.insert_one(lead)
+    cid = str(uuid.uuid4())
+    conv = {
+        "id": cid, "lead_id": lid, "ai_attiva": True, "stato": "ai_conversazione",
+        "unread": 0, "operatore": None, "last_message": "", "last_message_at": now,
+    }
+    await db.conversations.insert_one(conv)
+    return lead, conv
+
+
 async def handle_inbound_wa(m: dict, value: dict):
     wa_from = m.get("from")
     text = (m.get("text") or {}).get("body", "")
+    if not wa_from:
+        return
     lead = await db.leads.find_one(
-        {"telefono": {"$regex": wa_from[-9:] if wa_from else "____"}}, {"_id": 0})
-    if not lead:
-        return
-    conv = await db.conversations.find_one({"lead_id": lead["id"]}, {"_id": 0})
-    if not conv:
-        return
+        {"telefono": {"$regex": wa_from[-9:]}}, {"_id": 0})
+    conv = await db.conversations.find_one({"lead_id": lead["id"]}, {"_id": 0}) if lead else None
+    if not lead or not conv:
+        lead, conv = await create_inbound_lead(wa_from, value)
     await db.messages.insert_one({
         "id": str(uuid.uuid4()), "conversation_id": conv["id"], "sender": "cliente",
         "text": text, "type": "text", "created_at": iso(now_utc()), "read": False,
@@ -1561,6 +1661,59 @@ async def get_stages(user: dict = Depends(current_user)):
 @api.get("/")
 async def root():
     return {"app": "SUPER GIRL API", "status": "ok"}
+
+
+@api.get("/privacy", response_class=HTMLResponse)
+async def privacy_policy():
+    html = """<!DOCTYPE html>
+<html lang="it"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy Policy - J'adore Mimì</title>
+<style>
+body{font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;max-width:820px;margin:0 auto;padding:32px 20px;color:#1a1a1a;line-height:1.65}
+h1{color:#111;font-size:26px} h2{color:#222;font-size:19px;margin-top:28px}
+.brand{color:#B68D40;font-weight:700} a{color:#B68D40}
+.muted{color:#666;font-size:13px}
+</style></head><body>
+<h1>Informativa sulla Privacy - <span class="brand">J'adore Mim&igrave;</span></h1>
+<p class="muted">Ultimo aggiornamento: giugno 2026</p>
+
+<p>La presente informativa descrive come <strong>J'adore Mim&igrave;</strong> ("noi") raccoglie e utilizza i dati personali degli utenti ("tu") quando interagisci con noi tramite WhatsApp e le nostre campagne pubblicitarie su Meta (Facebook e Instagram).</p>
+
+<h2>1. Dati che raccogliamo</h2>
+<ul>
+<li>Nome e cognome, numero di telefono, indirizzo email (se forniti).</li>
+<li>Contenuto dei messaggi scambiati su WhatsApp con il nostro numero aziendale.</li>
+<li>Informazioni sul trattamento estetico di interesse, preferenze e appuntamenti.</li>
+<li>Dati provenienti dai moduli pubblicitari (Lead Ads) di Meta, quando compilati volontariamente.</li>
+</ul>
+
+<h2>2. Come utilizziamo i dati</h2>
+<ul>
+<li>Per risponderti e assisterti tramite il nostro assistente su WhatsApp.</li>
+<li>Per fornirti informazioni sui trattamenti e gestire le prenotazioni.</li>
+<li>Per finalit&agrave; di assistenza clienti e per migliorare il nostro servizio.</li>
+</ul>
+
+<h2>3. Base giuridica e consenso</h2>
+<p>Trattiamo i tuoi dati sulla base del consenso che fornisci scrivendoci o compilando i nostri moduli, e per l'esecuzione delle attivit&agrave; richieste. Puoi revocare il consenso in qualsiasi momento.</p>
+
+<h2>4. Condivisione dei dati</h2>
+<p>I dati sono trattati tramite l'API ufficiale di WhatsApp Business (Meta Platforms Ireland Ltd.) esclusivamente per consentire la comunicazione. Non vendiamo i tuoi dati a terzi.</p>
+
+<h2>5. Conservazione</h2>
+<p>Conserviamo i dati per il tempo necessario a fornirti il servizio e adempiere agli obblighi di legge, dopodich&eacute; vengono cancellati o resi anonimi.</p>
+
+<h2>6. I tuoi diritti</h2>
+<p>Hai diritto di accedere, rettificare, cancellare i tuoi dati e opporti al trattamento. Per esercitarli scrivici al nostro numero WhatsApp o all'indirizzo email di contatto.</p>
+
+<h2>7. Contatti</h2>
+<p><span class="brand">J'adore Mim&igrave;</span><br>
+WhatsApp: +39 393 470 6525</p>
+
+<p class="muted">Questa informativa pu&ograve; essere aggiornata periodicamente. Continuando a interagire con noi accetti la versione pi&ugrave; recente.</p>
+</body></html>"""
+    return HTMLResponse(content=html)
 
 
 app.include_router(api)
