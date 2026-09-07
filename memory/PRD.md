@@ -96,3 +96,8 @@ admin@supergirl.app / Admin123! · operatore@supergirl.app / Operatore123!
 - Token permanente System User (scad. MAI) salvato in prod. phone_number_id=1283595714842859 (+39 393 470 6525) CONNECTED/CLOUD_API. WABA subscribed_apps=success. App subscription webhook active.
 - E2E confermato: inbound da +39 348 902 0968 -> lead "MC" -> AI reply "Ciao MC 💕..." -> status sent+read.
 - PROSSIMO: pubblicare app Meta (Live + Advanced Access whatsapp_business_messaging) usando Privacy URL, per aprire a TUTTI gli utenti (oltre ai numeri di test). Poi rimuovere diagnostica.
+
+## Pulizia + Template (2026-09-07, autonomo)
+- RIMOSSA diagnostica WhatsApp: eliminati _save_wa_debug, WA_WEBHOOK_GET/POST logging, endpoint /integrations/whatsapp/webhook-debug, scritture wa_webhook_debug. Mantenuti: .strip() verify_token, fix inbound organico (create_inbound_lead), pagina /api/privacy. (Richiede REDEPLOY per attivare la pulizia in produzione.)
+- Template WhatsApp "nuovo_lead_foto" (it, MARKETING, header IMAGE + body {{1}}=nome {{2}}=servizio) creato e inviato in approvazione a Meta: id 1953039642036943, status PENDING. Compatibile con whatsapp_send_template esistente.
+- DA FARE (richiede input utente, non autonomo): push mobile (google-services.json + build), collegamento Lead Ads (Page Access Token + subscribe leadgen su Pagina FB), notifiche desktop/browser (frontend).

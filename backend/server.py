@@ -1369,61 +1369,15 @@ def _mask_token(v: str) -> Optional[str]:
     return f"{v[:2]}…{v[-2:]}"
 
 
-async def _save_wa_debug(request: Request, p, received: str, status: int, challenge_returned):
-    h = request.headers
-    doc = {
-        "ts": now_utc(),
-        "mode": p.get("hub.mode"),
-        "challenge_received": p.get("hub.challenge"),
-        "challenge_returned": challenge_returned,
-        "status": status,
-        # segreti mai in chiaro: solo esito confronto + maschera + lunghezza
-        "token_matches_supergirl2026": (received == "supergirl2026"),
-        "token_masked": _mask_token(received),
-        "token_length": len(received),
-        "user_agent": h.get("user-agent"),
-        "x_forwarded_for": h.get("x-forwarded-for"),
-        "cf_connecting_ip": h.get("cf-connecting-ip"),
-        "x_real_ip": h.get("x-real-ip"),
-        "host": h.get("host"),
-        "query_keys": list(p.keys()),
-    }
-    try:
-        await db.wa_webhook_debug.insert_one(doc)
-    except Exception as e:
-        logger.error("wa_debug save failed: %s", e)
-
-
 @api.get("/integrations/whatsapp/webhook", response_class=PlainTextResponse)
 async def wa_verify(request: Request):
     cfg = await get_wa_config()
     p = request.query_params
-    h = request.headers
-    logger.info(
-        "WA_WEBHOOK_GET | query=%s | ua=%r | x-forwarded-for=%r | cf-connecting-ip=%r | x-real-ip=%r | host=%r",
-        dict(p), h.get("user-agent"), h.get("x-forwarded-for"),
-        h.get("cf-connecting-ip"), h.get("x-real-ip"), h.get("host"),
-    )
     expected = (cfg.get("verify_token") or "").strip()
     received = (p.get("hub.verify_token") or "").strip()
     if p.get("hub.mode") == "subscribe" and expected and hmac.compare_digest(received, expected):
-        challenge = p.get("hub.challenge") or ""
-        logger.info("WA_WEBHOOK_GET -> 200 challenge=%r", challenge)
-        await _save_wa_debug(request, p, received, 200, challenge)
-        return challenge
-    logger.info("WA_WEBHOOK_GET -> 403 (mode=%r expected_set=%s match=%s)",
-                p.get("hub.mode"), bool(expected), received == expected)
-    await _save_wa_debug(request, p, received, 403, None)
+        return p.get("hub.challenge") or ""
     raise HTTPException(status_code=403, detail="Verifica webhook fallita")
-
-
-@api.get("/integrations/whatsapp/webhook-debug")
-async def wa_webhook_debug(user: dict = Depends(require_admin)):
-    docs = await db.wa_webhook_debug.find({}, {"_id": 0}).sort("ts", -1).to_list(20)
-    for d in docs:
-        if isinstance(d.get("ts"), datetime):
-            d["ts"] = iso(d["ts"])
-    return {"count": len(docs), "attempts": docs}
 
 
 @api.post("/integrations/whatsapp/webhook")
@@ -1432,34 +1386,14 @@ async def wa_webhook(request: Request):
     raw = await request.body()
     sig = request.headers.get("x-hub-signature-256")
     secret = cfg.get("app_secret")
-    sig_valid = None
     if secret and secret != "REPLACE_ME":
         expected = "sha256=" + hmac.new(secret.encode(), raw, hashlib.sha256).hexdigest()
-        sig_valid = bool(sig and hmac.compare_digest(expected, sig))
+        if not sig or not hmac.compare_digest(expected, sig):
+            raise HTTPException(status_code=403, detail="Firma non valida")
     try:
         payload = await request.json()
     except Exception:
         payload = {}
-    try:
-        froms, texts, statuses = [], [], []
-        for entry in payload.get("entry", []):
-            for change in entry.get("changes", []):
-                value = change.get("value", {})
-                for m in value.get("messages", []):
-                    froms.append(m.get("from"))
-                    texts.append((m.get("text") or {}).get("body"))
-                for s in value.get("statuses", []):
-                    statuses.append(s.get("status"))
-        logger.info("WA_WEBHOOK_POST | sig_present=%s sig_valid=%s from=%s texts=%s statuses=%s",
-                    bool(sig), sig_valid, froms, texts, statuses)
-        await db.wa_webhook_debug.insert_one({
-            "ts": now_utc(), "kind": "inbound_post", "sig_present": bool(sig),
-            "sig_valid": sig_valid, "from": froms, "texts": texts, "statuses": statuses,
-        })
-    except Exception as e:
-        logger.error("wa inbound debug failed: %s", e)
-    if sig_valid is False:
-        raise HTTPException(status_code=403, detail="Firma non valida")
     for entry in payload.get("entry", []):
         for change in entry.get("changes", []):
             value = change.get("value", {})
