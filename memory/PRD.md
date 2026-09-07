@@ -87,3 +87,12 @@ admin@supergirl.app / Admin123! · operatore@supergirl.app / Operatore123!
 - **Iscrizione WABA**: `POST /{waba_id}/subscribed_apps` → success.
 - **Registrazione numero Cloud API**: `POST /{phone_number_id}/register` con PIN 2FA (token NELL'HEADER Authorization, NON nel body — il body access_token dava code 100 subcode 33). Ora status=CONNECTED, platform_type=CLOUD_API. PIN salvato in /app/memory/whatsapp_pin.md.
 - **NEXT**: test end-to-end reale (utente scrive al numero → webhook inbound → AI Andrea risponde). Poi: token permanente (System User) al posto di quello temporaneo; approvazione template `nuovo_lead_foto`.
+
+## TEST E2E WhatsApp REALE — SUCCESSO (2026-09-07, produzione)
+- Fix inbound organico deployato: `handle_inbound_wa` ora crea lead+conversazione (origine=whatsapp_organico, campagna "WhatsApp Diretto") per numeri sconosciuti, poi AI risponde. `create_inbound_lead()` aggiunta.
+- POST webhook: aggiunto logging diagnostico (WA_WEBHOOK_POST + wa_webhook_debug kind=inbound_post) con from/texts/sig_valid/statuses. DA RIMUOVERE a fine collaudo (insieme a GET webhook-debug + collezione wa_webhook_debug).
+- Pagina Privacy pubblica: GET /api/privacy (HTMLResponse) -> per pubblicazione app Meta. URL: https://ai-conversion-4.emergent.host/api/privacy
+- Profilo WhatsApp Business: nome "J'adore Mimì" (verified_name APPROVED), foto profilo = foto brandizzata Andrea (caricata via Resumable Upload API), about impostato.
+- Token permanente System User (scad. MAI) salvato in prod. phone_number_id=1283595714842859 (+39 393 470 6525) CONNECTED/CLOUD_API. WABA subscribed_apps=success. App subscription webhook active.
+- E2E confermato: inbound da +39 348 902 0968 -> lead "MC" -> AI reply "Ciao MC 💕..." -> status sent+read.
+- PROSSIMO: pubblicare app Meta (Live + Advanced Access whatsapp_business_messaging) usando Privacy URL, per aprire a TUTTI gli utenti (oltre ai numeri di test). Poi rimuovere diagnostica.
