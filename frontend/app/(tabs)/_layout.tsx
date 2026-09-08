@@ -2,9 +2,19 @@ import React from "react";
 import { Tabs } from "expo-router";
 import { Feather } from "@expo/vector-icons";
 import { Platform } from "react-native";
-import { colors, spacing } from "@/src/theme";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { colors } from "@/src/theme";
 
 export default function TabsLayout() {
+  const insets = useSafeAreaInsets();
+  // Spazio extra sotto le icone oltre alla safe-area di sistema, così la barra
+  // non finisce mai sopra la navigation bar di Android e resta comoda da toccare.
+  const extra = Platform.OS === "web" ? 16 : 10;
+  const padBottom = insets.bottom + extra;
+  const paddingTop = 8;
+  const iconLabelArea = 52; // area riservata a icona + etichetta (sempre visibili)
+  const barHeight = paddingTop + iconLabelArea + padBottom;
+
   return (
     <Tabs
       screenOptions={{
@@ -15,10 +25,11 @@ export default function TabsLayout() {
           backgroundColor: colors.surfaceSecondary,
           borderTopColor: colors.border,
           borderTopWidth: 1,
-          height: Platform.OS === "ios" ? 88 : 68,
-          paddingTop: spacing.sm,
-          paddingBottom: Platform.OS === "ios" ? spacing.xl : spacing.md,
+          height: barHeight,
+          paddingTop: paddingTop,
+          paddingBottom: padBottom,
         },
+        tabBarItemStyle: { paddingVertical: 2 },
         tabBarLabelStyle: { fontSize: 11, fontWeight: "700", letterSpacing: 0.3 },
       }}
     >
