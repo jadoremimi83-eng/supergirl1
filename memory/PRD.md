@@ -108,3 +108,8 @@ admin@supergirl.app / Admin123! · operatore@supergirl.app / Operatore123!
 - Frontend: src/push.ts (registerForPush con getDevicePushTokenAsync), wiring in auth.tsx (login + restore), _layout.tsx con setNotificationHandler + channel default (module scope), tap handlers (warm+cold) che aprono /conversation/{id}, nudge settimanale con Linking.openSettings. app.json plugin expo-notifications aggiunto.
 - LIMITE: funziona SOLO su build reale iOS/Android dopo Publish->Deploy->Generate build (NON in Expo Go/web/preview). Al build l'utente dovrà caricare Google service account JSON + APNs .p8 (guide nella UI di build).
 - Nota: le push del relay gestito sono MOBILI (FCM/APNs). Le notifiche desktop/browser sul PC della segretaria NON sono coperte da questo servizio (resta la notifica in-app / campanella mentre l'app web è aperta).
+
+## Modifiche WhatsApp (2026-09-08)
+- Etichetta chat: rimosso "· AI" → in conversation/[id].tsx ora la bolla mostra solo il nome assistente ("Andrea"). Il flag AI resta interno (sender="ai" nel DB).
+- Typing indicator: nuovo helper whatsapp_send_typing(message_id) → POST /{pnid}/messages con status=read + typing_indicator{type:text}. Chiamato in handle_inbound_wa subito dopo il guard ai_attiva (prima di ai_generate_reply). Mostra "Andrea sta scrivendo…" fino a ~25s o fino all'invio della risposta. Non blocca (try/except).
+- Follow-up automatici (2 step 4h+giorno dopo, orari 9-19, testi modificabili + message_options), segmentazione (/segments + filtri /leads + UI chip in clienti.tsx), push notifiche, template nuovo_lead_foto + promemoria_followup (PENDING): TUTTO richiede un unico Publish->Deploy per andare live in produzione.

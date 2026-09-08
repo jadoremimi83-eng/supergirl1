@@ -139,7 +139,7 @@ export default function Conversation() {
             <View style={styles.senderRow}>
               {isAi ? <Avatar uri={assistant.avatarUri} name={assistant.name} size={16} position="top" /> : null}
               <Text style={[styles.senderTag, isAi ? { color: colors.brandPrimary } : { color: colors.brandSecondary }]}>
-                {isAi ? `${assistant.name.toUpperCase()} · AI` : "OPERATORE"}
+                {isAi ? assistant.name : "OPERATORE"}
               </Text>
             </View>
           )}

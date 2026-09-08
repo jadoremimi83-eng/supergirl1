@@ -9,9 +9,15 @@ import uuid
 import hmac
 import hashlib
 import logging
+import asyncio
 import requests
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
+try:
+    from zoneinfo import ZoneInfo
+    ROME_TZ = ZoneInfo("Europe/Rome")
+except Exception:
+    ROME_TZ = timezone(timedelta(hours=2))
 from typing import List, Optional
 
 import jwt
@@ -578,10 +584,18 @@ async def simulate_ai_turn(conv_id: str, user: dict = Depends(current_user)):
 # ---------------------------------------------------------------------------
 @api.get("/leads")
 async def list_leads(search: Optional[str] = None, stato: Optional[str] = None,
+                     sede: Optional[str] = None, servizio: Optional[str] = None,
+                     temperature: Optional[str] = None,
                      user: dict = Depends(current_user)):
     query: dict = {}
     if stato:
         query["stato_pipeline"] = stato
+    if sede:
+        query["sede"] = sede
+    if servizio:
+        query["servizio"] = servizio
+    if temperature:
+        query["temperature"] = temperature
     if search:
         s = search.strip()
         query["$or"] = [
@@ -592,6 +606,29 @@ async def list_leads(search: Optional[str] = None, stato: Optional[str] = None,
     leads = await db.leads.find(query, {"_id": 0}).sort(
         "ultimo_contatto", -1).to_list(500)
     return leads
+
+
+@api.get("/segments")
+async def lead_segments(user: dict = Depends(current_user)):
+    """Valori distinti + conteggi per segmentare le clienti."""
+    leads = await db.leads.find({}, {"_id": 0}).to_list(2000)
+
+    def counts(field: str):
+        out: dict = {}
+        for l in leads:
+            v = l.get(field)
+            if v:
+                out[v] = out.get(v, 0) + 1
+        return [{"value": k, "count": v} for k, v in
+                sorted(out.items(), key=lambda x: -x[1])]
+
+    return {
+        "total": len(leads),
+        "sede": counts("sede"),
+        "servizio": counts("servizio"),
+        "stato_pipeline": counts("stato_pipeline"),
+        "temperature": counts("temperature"),
+    }
 
 
 @api.get("/leads/{lead_id}")
@@ -963,20 +1000,23 @@ async def update_kb(body: KBInput, user: dict = Depends(require_admin)):
 
 @api.get("/followups")
 async def get_followup_rules(user: dict = Depends(current_user)):
-    rules = await db.followup_rules.find_one({}, {"_id": 0})
-    return rules or {}
+    return await get_followup_rules_doc()
 
 
 class FollowupRules(BaseModel):
     enabled: bool = True
+    quiet_start: Optional[int] = None
+    quiet_end: Optional[int] = None
     steps: list = []
+    message_options: Optional[list] = None
 
 
 @api.patch("/followups")
 async def update_followup_rules(body: FollowupRules,
                                 user: dict = Depends(require_admin)):
-    await db.followup_rules.update_one({}, {"$set": body.dict()}, upsert=True)
-    return await db.followup_rules.find_one({}, {"_id": 0})
+    updates = {k: v for k, v in body.dict().items() if v is not None}
+    await db.followup_rules.update_one({}, {"$set": updates}, upsert=True)
+    return await get_followup_rules_doc()
 
 
 @api.get("/settings")
@@ -1102,11 +1142,7 @@ async def ingest_meta_lead(data: dict) -> dict:
         "id": str(uuid.uuid4()), "lead_id": lid, "from_status": None,
         "to_status": "nuovo_lead", "changed_by": "meta", "created_at": now,
     })
-    await db.followups.insert_one({
-        "id": str(uuid.uuid4()), "lead_id": lid, "label": "Follow-up 1",
-        "delay": "2 ore", "status": "programmato", "created_at": now,
-        "updated_at": now,
-    })
+    await schedule_followups(lead)
     await create_notification("nuova_chat", lead,
                               f"Nuovo lead da Meta ({campagna or 'campagna'})")
     lead_clean = await db.leads.find_one({"id": lid}, {"_id": 0})
@@ -1419,6 +1455,153 @@ async def whatsapp_send_template(to: str, nome: str, servizio: str, image_link: 
     return r.json() if not r.is_error else {"error": r.text}
 
 
+# ---------------------------------------------------------------------------
+# FOLLOW-UP AUTOMATICI (incrementale, non tocca pipeline/webhook esistenti)
+# ---------------------------------------------------------------------------
+FOLLOWUP_TEMPLATE_NAME = "promemoria_followup"
+
+DEFAULT_FOLLOWUP_RULES = {
+    "enabled": True,
+    "quiet_start": 9,   # ora locale minima (Europe/Rome)
+    "quiet_end": 19,    # ora locale massima
+    "steps": [
+        {"label": "Follow-up 1", "delay_hours": 4,
+         "message": "Ciao {nome} 💛 sono Andrea di J'adore Mimì. Hai avuto modo di pensare al trattamento di cui parlavamo? Sono qui per qualsiasi dubbio ✨"},
+        {"label": "Follow-up 2", "delay_hours": 24,
+         "message": "Ciao {nome} 🌷 ci tengo a te: se vuoi ti trovo io l'orario giusto per la tua prima seduta da J'adore Mimì. Ti va se ne parliamo?"},
+    ],
+    # Testi alternativi selezionabili dal pannello
+    "message_options": [
+        "Ciao {nome} 💛 sono Andrea di J'adore Mimì. Posso aiutarti a scegliere il trattamento giusto per te?",
+        "Ciao {nome} ✨ hai ancora qualche dubbio? Scrivimi pure, ti rispondo subito io.",
+        "Ciao {nome} 🌷 vuoi che ti proponga un paio di orari per la tua prima seduta?",
+    ],
+}
+
+
+async def get_followup_rules_doc() -> dict:
+    doc = await db.followup_rules.find_one({}, {"_id": 0})
+    if not doc or not doc.get("steps"):
+        return DEFAULT_FOLLOWUP_RULES
+    return {**DEFAULT_FOLLOWUP_RULES, **doc}
+
+
+def _rome_adjust(dt_utc: datetime, quiet_start: int, quiet_end: int) -> datetime:
+    """Sposta l'orario nella finestra locale [quiet_start, quiet_end)."""
+    local = dt_utc.astimezone(ROME_TZ)
+    if local.hour < quiet_start:
+        local = local.replace(hour=quiet_start, minute=0, second=0, microsecond=0)
+    elif local.hour >= quiet_end:
+        local = (local + timedelta(days=1)).replace(
+            hour=quiet_start, minute=0, second=0, microsecond=0)
+    return local.astimezone(timezone.utc)
+
+
+async def schedule_followups(lead: dict):
+    """Programma i follow-up per un lead appena creato (idempotente per label)."""
+    rules = await get_followup_rules_doc()
+    if not rules.get("enabled", True):
+        return
+    now = now_utc()
+    for step in rules.get("steps", []):
+        due = _rome_adjust(now + timedelta(hours=float(step.get("delay_hours", 4))),
+                           int(rules.get("quiet_start", 9)), int(rules.get("quiet_end", 19)))
+        await db.followups.insert_one({
+            "id": str(uuid.uuid4()), "lead_id": lead["id"],
+            "label": step.get("label", "Follow-up"),
+            "message": step.get("message", ""),
+            "due_at": iso(due), "status": "programmato",
+            "created_at": iso(now), "updated_at": iso(now),
+        })
+
+
+async def _send_one_followup(fu: dict):
+    lead = await db.leads.find_one({"id": fu["lead_id"]}, {"_id": 0})
+    if not lead:
+        await db.followups.update_one({"id": fu["id"]}, {"$set": {"status": "annullato"}})
+        return
+    # Se la cliente è già avanzata (ha risposto / handoff / prenotata), salta
+    if lead.get("stato_pipeline") in ("da_fissare", "prenotato", "perso", "cliente"):
+        await db.followups.update_one({"id": fu["id"]}, {"$set": {"status": "annullato"}})
+        return
+    conv = await db.conversations.find_one({"lead_id": lead["id"]}, {"_id": 0})
+    if not conv:
+        await db.followups.update_one({"id": fu["id"]}, {"$set": {"status": "annullato"}})
+        return
+    nome = lead.get("nome", "").strip() or "ciao"
+    text = (fu.get("message") or "Ciao {nome} 💛").replace("{nome}", nome)
+    tel = lead.get("telefono", "")
+    # Finestra 24h: ultimo messaggio cliente
+    msgs = await db.messages.find({"conversation_id": conv["id"]}, {"_id": 0}).to_list(500)
+    last_cust = None
+    for m in msgs:
+        if m.get("sender") == "cliente":
+            ts = m.get("created_at")
+            if ts and (last_cust is None or ts > last_cust):
+                last_cust = ts
+    within_24h = False
+    if last_cust:
+        try:
+            within_24h = (now_utc() - datetime.fromisoformat(last_cust)) < timedelta(hours=24)
+        except Exception:
+            within_24h = False
+    try:
+        if within_24h:
+            await whatsapp_send_text(tel, text)
+        else:
+            await whatsapp_send_followup_template(tel, nome)
+    except Exception as e:
+        logger.error(f"followup send failed: {e}")
+        return
+    now = iso(now_utc())
+    await db.messages.insert_one({
+        "id": str(uuid.uuid4()), "conversation_id": conv["id"], "sender": "ai",
+        "text": text, "type": "text", "created_at": now, "read": True,
+    })
+    await db.conversations.update_one({"id": conv["id"]}, {"$set": {
+        "last_message": text, "last_message_at": now}})
+    await db.followups.update_one({"id": fu["id"]}, {"$set": {
+        "status": "inviato", "sent_at": now, "updated_at": now}})
+
+
+async def whatsapp_send_followup_template(to: str, nome: str):
+    cfg = await get_wa_config()
+    if not wa_is_configured(cfg) or not to:
+        return {"skipped": True}
+    payload = {"messaging_product": "whatsapp", "recipient_type": "individual",
+               "to": to, "type": "template",
+               "template": {"name": FOLLOWUP_TEMPLATE_NAME,
+                            "language": {"code": cfg.get("template_language", "it")},
+                            "components": [{"type": "body", "parameters": [
+                                {"type": "text", "text": nome}]}]}}
+    url = f"https://graph.facebook.com/{META_API_VERSION}/{cfg['phone_number_id']}/messages"
+    async with httpx.AsyncClient(timeout=20) as c:
+        r = await c.post(url, headers={"Authorization": f"Bearer {cfg['token']}"}, json=payload)
+    if r.is_error:
+        logger.error(f"WA followup template error: {r.text}")
+    return r.json() if not r.is_error else {"error": r.text}
+
+
+async def followup_worker():
+    """Loop in background: invia i follow-up dovuti, rispettando gli orari."""
+    while True:
+        try:
+            rules = await get_followup_rules_doc()
+            if rules.get("enabled", True):
+                now_iso = iso(now_utc())
+                local_h = now_utc().astimezone(ROME_TZ).hour
+                in_hours = int(rules.get("quiet_start", 9)) <= local_h < int(rules.get("quiet_end", 19))
+                if in_hours:
+                    due = await db.followups.find(
+                        {"status": "programmato", "due_at": {"$lte": now_iso}},
+                        {"_id": 0}).to_list(50)
+                    for fu in due:
+                        await _send_one_followup(fu)
+        except Exception as e:
+            logger.error(f"followup_worker error: {e}")
+        await asyncio.sleep(120)
+
+
 def _mask_token(v: str) -> Optional[str]:
     if not v:
         return None
@@ -1493,7 +1676,25 @@ async def create_inbound_lead(wa_from: str, value: dict):
         "unread": 0, "operatore": None, "last_message": "", "last_message_at": now,
     }
     await db.conversations.insert_one(conv)
+    await schedule_followups(lead)
     return lead, conv
+
+
+async def whatsapp_send_typing(message_id: str):
+    """Mostra 'Andrea sta scrivendo…' + segna il messaggio come letto (fino a ~25s)."""
+    cfg = await get_wa_config()
+    if not wa_is_configured(cfg) or not message_id:
+        return
+    url = f"https://graph.facebook.com/{META_API_VERSION}/{cfg['phone_number_id']}/messages"
+    payload = {"messaging_product": "whatsapp", "status": "read",
+               "message_id": message_id, "typing_indicator": {"type": "text"}}
+    try:
+        async with httpx.AsyncClient(timeout=10) as c:
+            r = await c.post(url, headers={"Authorization": f"Bearer {cfg['token']}"}, json=payload)
+        if r.is_error:
+            logger.warning(f"WA typing error: {r.text}")
+    except Exception as e:
+        logger.warning(f"WA typing failed: {e}")
 
 
 async def handle_inbound_wa(m: dict, value: dict):
@@ -1516,6 +1717,8 @@ async def handle_inbound_wa(m: dict, value: dict):
         "unread": conv.get("unread", 0) + 1}})
     if not conv.get("ai_attiva", True):
         return
+    # "Andrea sta scrivendo…" subito, prima di generare la risposta
+    await whatsapp_send_typing(m.get("id"))
     motivo, ai_msg = detect_handoff(text)
     if motivo:
         await do_handoff(lead, conv, motivo, ai_msg)
@@ -1722,6 +1925,7 @@ app.add_middleware(
 async def startup():
     from seed_data import seed_database
     await seed_database(db)
+    asyncio.create_task(followup_worker())
 
 
 @app.on_event("shutdown")

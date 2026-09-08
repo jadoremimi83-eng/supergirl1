@@ -1,5 +1,5 @@
 import React, { useCallback, useState } from "react";
-import { View, Text, StyleSheet, FlatList, Pressable, TextInput } from "react-native";
+import { View, Text, StyleSheet, FlatList, Pressable, TextInput, ScrollView } from "react-native";
 import { useRouter, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
@@ -14,10 +14,20 @@ export default function Clienti() {
   const [search, setSearch] = useState("");
   const [leads, setLeads] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [segments, setSegments] = useState<any>(null);
+  const [filters, setFilters] = useState<any>({});
+  const [showFilters, setShowFilters] = useState(false);
 
-  const load = useCallback(async (q: string) => {
+  const load = useCallback(async (q: string, f: any) => {
     try {
-      const res = await api.get(`/leads${q ? `?search=${encodeURIComponent(q)}` : ""}`);
+      const p = new URLSearchParams();
+      if (q) p.append("search", q);
+      if (f.sede) p.append("sede", f.sede);
+      if (f.servizio) p.append("servizio", f.servizio);
+      if (f.stato_pipeline) p.append("stato", f.stato_pipeline);
+      if (f.temperature) p.append("temperature", f.temperature);
+      const qs = p.toString();
+      const res = await api.get(`/leads${qs ? `?${qs}` : ""}`);
       setLeads(res);
     } catch {}
     setLoading(false);
@@ -25,14 +35,31 @@ export default function Clienti() {
 
   useFocusEffect(
     useCallback(() => {
-      load(search);
+      load(search, filters);
+      api.get("/segments").then(setSegments).catch(() => {});
     }, [])
   );
 
   const onSearch = (q: string) => {
     setSearch(q);
-    load(q);
+    load(q, filters);
   };
+
+  const toggleFilter = (cat: string, val: string) => {
+    setFilters((prev: any) => {
+      const next = { ...prev, [cat]: prev[cat] === val ? undefined : val };
+      load(search, next);
+      return next;
+    });
+  };
+
+  const clearFilters = () => {
+    setFilters({});
+    load(search, {});
+  };
+
+  const activeCount = Object.values(filters).filter(Boolean).length;
+  const nice = (s: string) => (s || "").replace(/_/g, " ");
 
   const renderRow = ({ item }: { item: any }) => (
     <Pressable
@@ -81,7 +108,55 @@ export default function Clienti() {
             </Pressable>
           ) : null}
         </View>
+        <Pressable
+          testID="toggle-filters"
+          onPress={() => setShowFilters((v) => !v)}
+          style={[styles.filterBtn, activeCount > 0 && styles.filterBtnActive]}
+        >
+          <Feather name="sliders" size={18} color={activeCount > 0 ? colors.onPrimary : colors.onSurfaceSecondary} />
+          {activeCount > 0 ? <Text style={styles.filterBadge}>{activeCount}</Text> : null}
+        </Pressable>
       </View>
+
+      {showFilters && segments ? (
+        <View style={styles.filterPanel}>
+          {[
+            { key: "sede", label: "Sede", data: segments.sede },
+            { key: "servizio", label: "Trattamento", data: segments.servizio },
+            { key: "stato_pipeline", label: "Stato", data: segments.stato_pipeline },
+            { key: "temperature", label: "Interesse", data: segments.temperature },
+          ].map((cat) =>
+            cat.data && cat.data.length ? (
+              <View key={cat.key} style={{ marginBottom: spacing.sm }}>
+                <Text style={styles.filterCat}>{cat.label}</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: spacing.sm, paddingRight: spacing.lg }}>
+                  {cat.data.map((opt: any) => {
+                    const active = filters[cat.key] === opt.value;
+                    return (
+                      <Pressable
+                        key={opt.value}
+                        testID={`chip-${cat.key}-${opt.value}`}
+                        onPress={() => toggleFilter(cat.key, opt.value)}
+                        style={[styles.chip, active && styles.chipActive]}
+                      >
+                        <Text style={[styles.chipText, active && styles.chipTextActive]}>
+                          {nice(opt.value)} · {opt.count}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </ScrollView>
+              </View>
+            ) : null
+          )}
+          {activeCount > 0 ? (
+            <Pressable onPress={clearFilters} style={styles.clearBtn} testID="clear-filters">
+              <Feather name="x-circle" size={14} color={colors.onSurfaceSecondary} />
+              <Text style={styles.clearText}>Pulisci filtri</Text>
+            </Pressable>
+          ) : null}
+        </View>
+      ) : null}
       {loading ? (
         <Loading />
       ) : leads.length === 0 ? (
@@ -101,8 +176,9 @@ export default function Clienti() {
 }
 
 const styles = StyleSheet.create({
-  searchWrap: { paddingHorizontal: spacing.lg, paddingVertical: spacing.md },
+  searchWrap: { flexDirection: "row", alignItems: "center", gap: spacing.sm, paddingHorizontal: spacing.lg, paddingVertical: spacing.md },
   searchBox: {
+    flex: 1,
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.sm,
@@ -112,6 +188,26 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     paddingHorizontal: spacing.lg,
   },
+  filterBtn: {
+    flexDirection: "row", alignItems: "center", gap: 4,
+    height: 44, paddingHorizontal: spacing.md,
+    borderRadius: radius.md, borderWidth: 1, borderColor: colors.border,
+    backgroundColor: colors.surfaceSecondary,
+  },
+  filterBtnActive: { backgroundColor: colors.brandPrimary, borderColor: colors.brandPrimary },
+  filterBadge: { color: colors.onBrandPrimary, fontSize: 12, fontWeight: "800" },
+  filterPanel: { paddingHorizontal: spacing.lg, paddingBottom: spacing.md },
+  filterCat: { color: colors.onSurfaceTertiary, fontSize: 11, fontWeight: "700", marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.4 },
+  chip: {
+    paddingHorizontal: spacing.md, paddingVertical: 7,
+    borderRadius: 999, borderWidth: 1, borderColor: colors.border,
+    backgroundColor: colors.surfaceSecondary,
+  },
+  chipActive: { backgroundColor: colors.brandPrimary, borderColor: colors.brandPrimary },
+  chipText: { color: colors.onSurfaceSecondary, fontSize: 12.5, fontWeight: "600", textTransform: "capitalize" },
+  chipTextActive: { color: colors.onBrandPrimary, fontWeight: "800" },
+  clearBtn: { flexDirection: "row", alignItems: "center", gap: 5, marginTop: 4, alignSelf: "flex-start" },
+  clearText: { color: colors.onSurfaceSecondary, fontSize: 12.5, fontWeight: "600" },
   searchInput: { flex: 1, color: colors.onSurface, fontSize: type.lg, paddingVertical: 12 },
   row: { flexDirection: "row", alignItems: "center", gap: spacing.md, paddingHorizontal: spacing.lg, paddingVertical: spacing.md },
   name: { color: colors.onSurface, fontSize: type.lg, fontWeight: "700" },
