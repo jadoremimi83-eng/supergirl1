@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "frontend",
+    "name": "Super Girl",
     "slug": "frontend",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -28,7 +28,15 @@
     "web": {
       "bundler": "metro",
       "output": "single",
-      "favicon": "./assets/images/favicon.png"
+      "favicon": "./assets/images/favicon.png",
+      "name": "Super Girl",
+      "shortName": "Super Girl",
+      "lang": "it",
+      "description": "CRM conversazionale J'adore Mimì",
+      "display": "standalone",
+      "orientation": "portrait",
+      "themeColor": "#0A0A0A",
+      "backgroundColor": "#0A0A0A"
     },
     "plugins": [
       "expo-router",

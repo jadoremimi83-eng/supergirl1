@@ -1,7 +1,7 @@
 import { Stack, useRouter } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import { useEffect } from "react";
-import { LogBox, View, Platform, Alert } from "react-native";
+import { LogBox, View, StyleSheet, Platform, Alert } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { KeyboardProvider } from "react-native-keyboard-controller";
@@ -90,30 +90,58 @@ export default function RootLayout() {
 
   if (!loaded && !error) return null;
 
+  const stack = (
+    <Stack
+      screenOptions={{
+        headerShown: false,
+        contentStyle: { backgroundColor: colors.surface },
+        animation: "slide_from_right",
+      }}
+    >
+      <Stack.Screen name="index" />
+      <Stack.Screen name="login" />
+      <Stack.Screen name="(tabs)" />
+      <Stack.Screen name="priorities" />
+      <Stack.Screen name="notifiche" options={{ presentation: "modal" }} />
+      <Stack.Screen name="conversation/[id]" />
+      <Stack.Screen name="cliente/[id]" />
+    </Stack>
+  );
+
   return (
-    <GestureHandlerRootView style={{ flex: 1, backgroundColor: colors.surface }}>
+    <GestureHandlerRootView style={{ flex: 1, backgroundColor: Platform.OS === "web" ? "#000" : colors.surface }}>
       <SafeAreaProvider>
         <KeyboardProvider>
           <AuthProvider>
             <StatusBar style="light" />
-            <Stack
-              screenOptions={{
-                headerShown: false,
-                contentStyle: { backgroundColor: colors.surface },
-                animation: "slide_from_right",
-              }}
-            >
-              <Stack.Screen name="index" />
-              <Stack.Screen name="login" />
-              <Stack.Screen name="(tabs)" />
-              <Stack.Screen name="priorities" />
-              <Stack.Screen name="notifiche" options={{ presentation: "modal" }} />
-              <Stack.Screen name="conversation/[id]" />
-              <Stack.Screen name="cliente/[id]" />
-            </Stack>
+            {Platform.OS === "web" ? (
+              <View style={styles.webShell}>
+                <View style={styles.webFrame}>{stack}</View>
+              </View>
+            ) : (
+              stack
+            )}
           </AuthProvider>
         </KeyboardProvider>
       </SafeAreaProvider>
     </GestureHandlerRootView>
   );
 }
+
+const styles = StyleSheet.create({
+  webShell: {
+    flex: 1,
+    alignItems: "center",
+    backgroundColor: "#000",
+  },
+  webFrame: {
+    flex: 1,
+    width: "100%",
+    maxWidth: 480,
+    backgroundColor: colors.surface,
+    borderLeftWidth: StyleSheet.hairlineWidth,
+    borderRightWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+    overflow: "hidden",
+  },
+});
