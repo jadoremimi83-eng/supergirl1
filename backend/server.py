@@ -220,17 +220,17 @@ def detect_handoff(text: str):
     low = text.lower()
     if any(k in low for k in BOOKING_KEYWORDS):
         return ("prenotazione",
-                "Benissimo! Controllo subito le disponibilità e ti richiamo "
+                "Va bene, allora controllo le disponibilità e ti richiamo "
                 "io a breve per fissare insieme l'appuntamento nel giorno che "
-                "preferisci 💛")
+                "preferisci.")
     if any(k in low for k in HUMAN_KEYWORDS):
         return ("richiesta_operatore",
-                "Certo! Passo subito la conversazione a una nostra collega che "
-                "ti ricontatterà personalmente. 💛")
+                "Ok, passo subito la conversazione a una nostra collega che "
+                "ti ricontatterà personalmente.")
     if any(k in low for k in ANGER_KEYWORDS):
         return ("situazione_delicata",
                 "Mi dispiace molto. Faccio intervenire subito una nostra "
-                "responsabile che si prenderà cura di te. 💛")
+                "responsabile che si prenderà cura di te.")
     return (None, None)
 
 
@@ -1113,10 +1113,10 @@ async def ingest_meta_lead(data: dict) -> dict:
     image_rel = (svc_doc or {}).get("immagine")
 
     greeting = (
-        f"Ciao {nome}, sono {ASSISTANT_NAME} di {BRAND_NAME} 💛\n"
-        f"Ho visto che sei interessata al trattamento {servizio or 'estetico'}. "
-        f"Ho ancora qualche disponibilità per la prossima settimana: "
-        f"preferisci venire la mattina o il pomeriggio?"
+        f"Ciao {nome}, sono {ASSISTANT_NAME} di {BRAND_NAME} 😊\n"
+        f"Ho visto che ti interessa il trattamento {servizio or 'estetico'}. "
+        f"Dimmi, qual è la cosa che vorresti migliorare? Così ti spiego come "
+        f"possiamo aiutarti."
     )
     await db.conversations.insert_one({
         "id": cid, "lead_id": lid, "ai_attiva": True, "stato": "nuovo_lead",
@@ -1313,12 +1313,36 @@ async def build_ai_system_prompt(lead: dict) -> str:
         f"NON far credere di avere un'agenda. Quando la cliente vuole procedere/prenotare, chiudi la parte "
         f"automatica con una frase naturale tipo: 'Controllo le disponibilità e ti richiamo per fissare "
         f"l'appuntamento.' Poi fermati (allo staff il resto).\n"
-        f"STILE NATURALE (fondamentale, sembra una persona reale): messaggi brevi e vari; NON iniziare con "
-        f"'Perfetto' e non usarlo MAI due volte di fila; alterna aperture ('Certo', 'Va bene', 'Benissimo', "
-        f"'Capito', 'Ottimo', 'D'accordo') ma spesso rispondi DIRETTAMENTE senza formula iniziale; usa le "
-        f"emoji solo ogni tanto e quando hanno senso, MAI cuori in ogni messaggio, MAI doppi cuori o sequenze "
-        f"di emoji; varia lunghezza, costruzione e tono; guarda gli ultimi messaggi e NON ripetere parole o "
-        f"strutture appena usate. Non rivelare mai di essere un assistente automatico o un'AI.\n"
+        f"STILE NATURALE (fondamentale — devi sembrare una persona vera, un'estetista/consulente donna "
+        f"che lavora da anni con clienti e ha confidenza nel consigliare): tono caldo, confidenziale e "
+        f"professionale ma MAI formale, freddo, perfettino o robotico.\n"
+        f"REGOLA EMOJI: VIETATO usare qualsiasi cuore (❤️ 💕 💛 🩷 💗 💖 ecc.), MAI, in nessun messaggio. "
+        f"Altre emoji (es. 😊) solo di rado, una ogni tanto e solo quando risulta naturale — NON in ogni "
+        f"messaggio, mai sequenze o doppie emoji.\n"
+        f"APERTURE VARIE: è VIETATO iniziare in modo automatico con 'Certo', 'Certamente', 'Perfetto', "
+        f"'Assolutamente'. Puoi usarle RARAMENTE ma non come formula fissa. Varia molto l'inizio: a volte "
+        f"rispondi DIRETTAMENTE senza formula; altre volte usa aperture naturali come 'Ok', 'Sì, guarda…', "
+        f"'Allora…', 'Ti spiego', 'Guarda…', 'Sì, questo è proprio uno dei trattamenti più richiesti', "
+        f"'Ti dico subito come funziona', 'Capito', 'Guarda, in questo caso farei così…'.\n"
+        f"CONFIDENZA: ogni tanto (non sempre) puoi usare parole come 'guarda', 'ti spiego', 'secondo me', "
+        f"'in questo caso', e occasionalmente 'tesoro' o 'cara' — ma ALTERNATE, non in ogni messaggio. "
+        f"IMPORTANTE: NON chiamare 'tesoro'/'cara' una cliente al primo messaggio; diventa più confidenziale "
+        f"solo col proseguire della conversazione, quando il tono lo permette, così resti spontanea e non costruita.\n"
+        f"ANTI-SCHEMA: NON seguire mai sempre lo stesso schema (es. 'Apertura! + spiegazione + domanda finale' "
+        f"oppure 'Perfetto! + spiegazione + emoji'). Varia l'apertura, la lunghezza delle frasi, il modo di "
+        f"spiegare, il modo di fare domande (a volte non fare domande), l'eventuale uso di emoji e il modo di "
+        f"concludere. Guarda i messaggi precedenti: se hai già spiegato una cosa NON ripeterla quasi identica "
+        f"poco dopo.\n"
+        f"LUNGHEZZA: su WhatsApp preferisci messaggi brevi e naturali. Se la cliente fa una domanda semplice, "
+        f"rispondi in modo semplice e breve. Usa risposte più lunghe SOLO quando devi davvero spiegare un "
+        f"trattamento, una promozione o qualcosa di importante.\n"
+        f"ESEMPIO DI TONO (due modi diversi di rispondere alla stessa domanda 'funziona sulla cellulite?', "
+        f"NON copiarli alla lettera, servono solo a farti capire lo stile): "
+        f"1) 'Sì, guarda, è proprio uno dei motivi per cui lo facciamo tanto. Lavora bene sulla cellulite e "
+        f"sulla compattezza della pelle. Poi dipende da come parti tu, perché ogni corpo risponde diversamente.' "
+        f"2) 'Sì 😊 soprattutto se il problema è cellulite e pelle poco compatta. In quel caso è uno dei "
+        f"trattamenti che valuterei.'\n"
+        f"Non rivelare mai di essere un assistente automatico o un'AI.\n"
         f"{prezzo_rule}"
         f"Quando indichi un prezzo, prima capisci l'obiettivo della cliente, poi proponi la soluzione.\n\n"
         f"REGOLA FONDAMENTALE: non inventare mai informazioni (prezzi, promo, risultati). Se non conosci una "
@@ -1339,6 +1363,28 @@ async def build_ai_system_prompt(lead: dict) -> str:
     )
 
 
+import re
+
+HEART_RE = re.compile(
+    "[" 
+    "\u2764\u2665\u2763"           # ❤ ♥ ❣
+    "\U0001F495-\U0001F49F"        # 💕💖💗💘💙💚💛💜💝💞💟
+    "\U0001F493\U0001F494"         # 💓 💔
+    "\U0001FA75-\U0001FA77"        # 🩵 🩶 🩷
+    "\U0001F9E1\U0001F5A4\U0001F90D\U0001F90E"  # 🧡 🖤 🤍 🤎
+    "]\ufe0f?"
+)
+
+
+def strip_hearts(text: str) -> str:
+    """Garanzia hard: rimuove qualsiasi cuore dalle risposte AI (regola non negoziabile)."""
+    if not text:
+        return text
+    cleaned = HEART_RE.sub("", text)
+    # ripulisci eventuali doppi spazi lasciati dalla rimozione
+    return re.sub(r"[ \t]{2,}", " ", cleaned).strip()
+
+
 async def ai_generate_reply(conv: dict, lead: dict) -> str:
     """Genera la prossima risposta commerciale dell'AI dato lo storico chat."""
     msgs = await db.messages.find(
@@ -1350,17 +1396,18 @@ async def ai_generate_reply(conv: dict, lead: dict) -> str:
     prompt = (
         f"Conversazione WhatsApp finora:\n{transcript}\n\n"
         f"Scrivi SOLO il prossimo messaggio di {ASSISTANT_NAME} alla cliente. "
-        f"Breve, naturale, una domanda sola, orientato a far avanzare verso l'appuntamento."
+        f"Rispetta lo STILE NATURALE: varia l'apertura (NON iniziare sempre con Certo/Perfetto/"
+        f"Assolutamente), niente cuori, emoji solo di rado. Se la domanda è semplice rispondi breve; "
+        f"fai al massimo UNA domanda e non sempre; non ripetere cose già dette."
     )
     try:
         chat = LlmChat(api_key=EMERGENT_LLM_KEY, session_id=conv["id"],
                        system_message=system).with_model(AI_PROVIDER, AI_MODEL)
         reply = await chat.send_message(UserMessage(text=prompt))
-        return (reply or "").strip() or "Certo! Dimmi pure, come posso aiutarti? 😊"
+        return strip_hearts((reply or "").strip()) or "Dimmi pure, come posso aiutarti?"
     except Exception as e:  # noqa
         logger.error(f"AI error: {e}")
-        return ("Grazie del tuo messaggio! Per aiutarti al meglio, qual è il risultato "
-                "principale che vorresti ottenere? 😊")
+        return ("Grazie del messaggio! Qual è il risultato principale che vorresti ottenere?")
 
 
 # ---------------------------------------------------------------------------
@@ -1500,15 +1547,15 @@ DEFAULT_FOLLOWUP_RULES = {
     "quiet_end": 19,    # ora locale massima
     "steps": [
         {"label": "Follow-up 1", "delay_hours": 4,
-         "message": "Ciao {nome} 💛 sono Andrea di J'adore Mimì. Hai avuto modo di pensare al trattamento di cui parlavamo? Sono qui per qualsiasi dubbio ✨"},
+         "message": "Ciao {nome}, sono Andrea di J'adore Mimì. Hai avuto modo di pensare al trattamento di cui parlavamo? Se hai qualche dubbio scrivimi pure, ti rispondo io."},
         {"label": "Follow-up 2", "delay_hours": 24,
-         "message": "Ciao {nome} 🌷 ci tengo a te: se vuoi ti trovo io l'orario giusto per la tua prima seduta da J'adore Mimì. Ti va se ne parliamo?"},
+         "message": "Ciao {nome}, ci tengo a risentirti: se vuoi ti spiego meglio come funziona la prima seduta da J'adore Mimì. Ti va se ne parliamo?"},
     ],
     # Testi alternativi selezionabili dal pannello
     "message_options": [
-        "Ciao {nome} 💛 sono Andrea di J'adore Mimì. Posso aiutarti a scegliere il trattamento giusto per te?",
-        "Ciao {nome} ✨ hai ancora qualche dubbio? Scrivimi pure, ti rispondo subito io.",
-        "Ciao {nome} 🌷 vuoi che ti proponga un paio di orari per la tua prima seduta?",
+        "Ciao {nome}, sono Andrea di J'adore Mimì. Posso aiutarti a scegliere il trattamento giusto per te?",
+        "Ciao {nome}, hai ancora qualche dubbio? Scrivimi pure, ti rispondo subito io 😊",
+        "Ciao {nome}, vuoi che ti spieghi meglio come possiamo aiutarti con il tuo obiettivo?",
     ],
 }
 
@@ -1563,7 +1610,7 @@ async def _send_one_followup(fu: dict):
         await db.followups.update_one({"id": fu["id"]}, {"$set": {"status": "annullato"}})
         return
     nome = lead.get("nome", "").strip() or "ciao"
-    text = (fu.get("message") or "Ciao {nome} 💛").replace("{nome}", nome)
+    text = (fu.get("message") or "Ciao {nome}").replace("{nome}", nome)
     tel = lead.get("telefono", "")
     # Finestra 24h: ultimo messaggio cliente
     msgs = await db.messages.find({"conversation_id": conv["id"]}, {"_id": 0}).to_list(500)
@@ -1673,12 +1720,21 @@ async def wa_webhook(request: Request):
         for change in entry.get("changes", []):
             value = change.get("value", {})
             for m in value.get("messages", []):
-                await handle_inbound_wa(m, value)
+                # elaborazione in background: consente il "sta scrivendo…"
+                # proporzionale senza bloccare la risposta 200 al webhook
+                asyncio.create_task(_safe_handle_inbound(m, value))
             for s in value.get("statuses", []):
                 await db.messages.update_one(
                     {"wa_id": s.get("id")},
                     {"$set": {"wa_status": s.get("status")}})
     return {"ok": True}
+
+
+async def _safe_handle_inbound(m: dict, value: dict):
+    try:
+        await handle_inbound_wa(m, value)
+    except Exception as e:  # noqa
+        logger.error(f"inbound handler error: {e}")
 
 
 async def create_inbound_lead(wa_from: str, value: dict):
@@ -1731,6 +1787,15 @@ async def whatsapp_send_typing(message_id: str):
         logger.warning(f"WA typing failed: {e}")
 
 
+def typing_seconds(text: str) -> float:
+    """Durata realistica del 'sta scrivendo…' in base alla lunghezza del messaggio.
+    Breve → pochi secondi; medio → intermedio; lungo → più secondi (cap 12s per
+    restare entro la finestra ~25s del typing indicator WhatsApp)."""
+    n = len(text or "")
+    secs = 1.8 + n / 20.0
+    return max(2.0, min(12.0, secs))
+
+
 async def handle_inbound_wa(m: dict, value: dict):
     wa_from = m.get("from")
     text = (m.get("text") or {}).get("body", "")
@@ -1751,14 +1816,24 @@ async def handle_inbound_wa(m: dict, value: dict):
         "unread": conv.get("unread", 0) + 1}})
     if not conv.get("ai_attiva", True):
         return
-    # "Andrea sta scrivendo…" subito, prima di generare la risposta
+    # "Andrea sta scrivendo…" subito, prima di generare/inviare la risposta
     await whatsapp_send_typing(m.get("id"))
+    loop = asyncio.get_event_loop()
+    t0 = loop.time()
     motivo, ai_msg = detect_handoff(text)
     if motivo:
+        # attesa proporzionale alla lunghezza del messaggio di handoff
+        await asyncio.sleep(typing_seconds(ai_msg))
         await do_handoff(lead, conv, motivo, ai_msg)
         await whatsapp_send_text(wa_from, ai_msg)
     else:
         reply = await ai_generate_reply(conv, lead)
+        # il "sta scrivendo…" resta attivo per un tempo proporzionale alla
+        # risposta, scontando il tempo già speso a generarla
+        elapsed = loop.time() - t0
+        delay = max(0.0, typing_seconds(reply) - elapsed)
+        if delay > 0:
+            await asyncio.sleep(delay)
         await db.messages.insert_one({
             "id": str(uuid.uuid4()), "conversation_id": conv["id"], "sender": "ai",
             "text": reply, "type": "text", "created_at": iso(now_utc()), "read": True})
