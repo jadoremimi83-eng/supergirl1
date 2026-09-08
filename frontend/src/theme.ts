@@ -67,6 +67,7 @@ export const STAGES: Record<string, { label: string; short: string; accent: stri
   ai_conversazione: { label: "AI IN CONVERSAZIONE", short: "AI", accent: "#8E7FD1" },
   in_attesa: { label: "IN ATTESA CLIENTE", short: "In attesa", accent: "#B68D40" },
   interessata: { label: "INTERESSATA", short: "Interessata", accent: "#DFAF70" },
+  attesa_chiamata: { label: "IN ATTESA DI CHIAMATA", short: "Da richiamare", accent: "#E0A94F" },
   da_fissare: { label: "DA FISSARE APPUNTAMENTO", short: "Da fissare", accent: "#D4AF37" },
   appuntamento_fissato: { label: "APPUNTAMENTO FISSATO", short: "Fissato", accent: "#7FC99E" },
   non_interessata: { label: "NON INTERESSATA", short: "Non int.", accent: "#9E9A90" },

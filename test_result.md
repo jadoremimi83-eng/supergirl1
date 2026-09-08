@@ -101,3 +101,77 @@
 #====================================================================================================
 # Testing Data - Main Agent and testing sub agent both should log testing data below this section
 #====================================================================================================
+
+user_problem_statement: |
+  CRM conversazionale SUPER GIRL. Verifica del nuovo flusso AI conversazionale e
+  del nuovo stato pipeline "IN ATTESA DI CHIAMATA" (attesa_chiamata).
+  L'AI (Andrea di J'adore Mimì) deve conversare in modo naturale (niente "Perfetto"
+  ripetuto, mai la parola "AI", promo con scadenza dinamica) e, quando la cliente
+  vuole prenotare, dire "Controllo le disponibilità e ti richiamo" e passare il lead
+  allo stato attesa_chiamata (handoff allo staff, AI OFF, follow-up annullati, notifica).
+
+backend:
+  - task: "Nuovo stato pipeline attesa_chiamata"
+    implemented: true
+    working: "NA"
+    file: "server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "Aggiunto stato 'attesa_chiamata' (IN ATTESA DI CHIAMATA) a PIPELINE_STAGES (order 5). do_handoff con motivo=prenotazione ora porta il lead a attesa_chiamata (invece di da_fissare). home/priorities e filtro conversazioni 'da_fissare' includono ora sia attesa_chiamata sia da_fissare. Analytics conteggia attesa_chiamata come booking-ready. config/stages, pipeline verificati via curl."
+  - task: "Flusso AI conversazionale naturale + handoff a attesa_chiamata"
+    implemented: true
+    working: "NA"
+    file: "server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "Verificato via curl: simulate-ai-turn con intenzione di prenotare -> handoff=True, motivo=prenotazione, new_status=attesa_chiamata, messaggio 'Benissimo! Controllo subito le disponibilità e ti richiamo...'. Reply naturale senza 'Perfetto'. Serve E2E completo (piu' turni) per verificare tono naturale, assenza parola 'AI', promo dinamica, e transizione corretta."
+
+frontend:
+  - task: "UI nuovo stato attesa_chiamata (pipeline, chat, scheda cliente)"
+    implemented: true
+    working: "NA"
+    file: "theme.ts, pipeline.tsx, chat.tsx"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: true
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "Aggiunto STAGES.attesa_chiamata (IN ATTESA DI CHIAMATA). Pipeline: colonna evidenziata (star) + espansa di default. Chat: badge star anche per attesa_chiamata + filtro 'Da fissare' include entrambi. Scheda cliente usa STAGES keys (picker automatico)."
+
+metadata:
+  created_by: "main_agent"
+  version: "1.1"
+  test_sequence: 4
+  run_ui: false
+
+test_plan:
+  current_focus:
+    - "Flusso AI conversazionale naturale + handoff a attesa_chiamata"
+    - "Nuovo stato pipeline attesa_chiamata"
+  stuck_tasks: []
+  test_all: false
+  test_priority: "high_first"
+
+agent_communication:
+    - agent: "main"
+      message: |
+        Testare il BACKEND del flusso AI (priorità). Credenziali admin@supergirl.app / Admin123!.
+        Flusso E2E consigliato:
+        1) POST /api/integrations/meta/simulate (admin) per creare un lead+conversazione (es. servizio "Bomba", senza sede).
+        2) Simulare piu' turni cliente<->AI con POST /api/conversations/{id}/simulate-customer poi /simulate-ai-turn:
+           - domanda generica -> AI risponde naturale, breve, UNA domanda.
+           - domanda prezzo -> AI usa struttura listino/promo con scadenza dinamica (data futura).
+           - VERIFICARE: l'AI non usa mai la parola "AI"/"assistente automatico"; non inizia sempre con "Perfetto"; non ripete la stessa apertura due volte di fila.
+        3) Turno con intenzione di prenotare ("vorrei prenotare"/"fissare un appuntamento") -> /simulate-ai-turn deve tornare handoff=True, motivo="prenotazione", new_status="attesa_chiamata"; il lead passa a stato_pipeline=attesa_chiamata, conversazione ai_attiva=False, follow-up annullati, notifica creata.
+        4) GET /api/pipeline deve includere lo stage attesa_chiamata; GET /api/home/priorities deve includere il lead in attesa_chiamata.
+        Pulire (o segnalare) eventuali lead di test creati.
+        NB: usato Emergent LLM key reale (GPT-5.4). Non mockato.

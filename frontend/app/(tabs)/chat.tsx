@@ -64,7 +64,7 @@ export default function Chat() {
     >
       <View>
         <Avatar uri={item.foto_profilo} name={item.lead_nome} size={52} />
-        {item.stato === "da_fissare" && (
+        {(item.stato === "da_fissare" || item.stato === "attesa_chiamata") && (
           <View style={styles.fissareDot}>
             <Feather name="star" size={9} color={colors.onBrandPrimary} />
           </View>

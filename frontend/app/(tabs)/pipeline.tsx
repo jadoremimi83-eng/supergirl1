@@ -16,7 +16,7 @@ export default function Pipeline() {
   const [stages, setStages] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [expanded, setExpanded] = useState<Record<string, boolean>>({ da_fissare: true, nuovo_lead: true });
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({ attesa_chiamata: true, da_fissare: true, nuovo_lead: true });
   const [moveLead, setMoveLead] = useState<any>(null);
 
   const load = useCallback(async () => {
@@ -67,7 +67,7 @@ export default function Pipeline() {
           {stages.map((stage) => {
             const meta = STAGES[stage.key];
             const open = !!expanded[stage.key];
-            const isFissare = stage.key === "da_fissare";
+            const isFissare = stage.key === "da_fissare" || stage.key === "attesa_chiamata";
             return (
               <View
                 key={stage.key}

@@ -99,13 +99,15 @@ PIPELINE_STAGES = [
      "desc": "L'AI ha risposto e aspetta la risposta del cliente."},
     {"key": "interessata", "label": "INTERESSATA", "order": 4,
      "desc": "Il cliente mostra interesse concreto."},
-    {"key": "da_fissare", "label": "DA FISSARE APPUNTAMENTO", "order": 5,
+    {"key": "attesa_chiamata", "label": "IN ATTESA DI CHIAMATA", "order": 5,
+     "desc": "La cliente vuole prenotare: lo staff deve richiamarla per fissare."},
+    {"key": "da_fissare", "label": "DA FISSARE APPUNTAMENTO", "order": 6,
      "desc": "Il cliente vuole prenotare e deve essere contattato dallo staff."},
-    {"key": "appuntamento_fissato", "label": "APPUNTAMENTO FISSATO", "order": 6,
+    {"key": "appuntamento_fissato", "label": "APPUNTAMENTO FISSATO", "order": 7,
      "desc": "Lo staff ha fissato manualmente l'appuntamento."},
-    {"key": "non_interessata", "label": "NON INTERESSATA", "order": 7,
+    {"key": "non_interessata", "label": "NON INTERESSATA", "order": 8,
      "desc": "Cliente che dichiara di non essere interessata."},
-    {"key": "persa", "label": "PERSA / NON RISPONDE", "order": 8,
+    {"key": "persa", "label": "PERSA / NON RISPONDE", "order": 9,
      "desc": "Cliente che non risponde dopo i follow-up previsti."},
 ]
 STAGE_LABELS = {s["key"]: s["label"] for s in PIPELINE_STAGES}
@@ -218,9 +220,9 @@ def detect_handoff(text: str):
     low = text.lower()
     if any(k in low for k in BOOKING_KEYWORDS):
         return ("prenotazione",
-                "Che bello! 😊 Ti metto subito in contatto con una nostra "
-                "specialista che ti ricontatterà a brevissimo per fissare "
-                "l'appuntamento nel giorno che preferisci. A prestissimo! 💛")
+                "Benissimo! Controllo subito le disponibilità e ti richiamo "
+                "io a breve per fissare insieme l'appuntamento nel giorno che "
+                "preferisci 💛")
     if any(k in low for k in HUMAN_KEYWORDS):
         return ("richiesta_operatore",
                 "Certo! Passo subito la conversazione a una nostra collega che "
@@ -349,7 +351,7 @@ async def do_handoff(lead: dict, conv: dict, motivo: str, ai_message: str):
     await db.messages.insert_one(msg)
 
     from_status = lead["stato_pipeline"]
-    new_status = "da_fissare"
+    new_status = "attesa_chiamata" if motivo == "prenotazione" else "da_fissare"
     await cancel_followups(lead["id"])
     summary = None
     # ricostruisci messaggi aggiornati per il riassunto
@@ -395,7 +397,7 @@ async def do_handoff(lead: dict, conv: dict, motivo: str, ai_message: str):
             f"/conversation/{conv['id']}",
         )
     clean_msg = {k: v for k, v in msg.items() if k != "_id"}
-    return clean_msg, summary
+    return clean_msg, summary, new_status
 
 
 # ---------------------------------------------------------------------------
@@ -423,7 +425,7 @@ async def list_conversations(filter: str = "tutte", user: dict = Depends(current
     elif filter == "operatore":
         query["ai_attiva"] = False
     elif filter == "da_fissare":
-        query["stato"] = "da_fissare"
+        query["stato"] = {"$in": ["attesa_chiamata", "da_fissare"]}
     elif filter == "non_lette":
         query["unread"] = {"$gt": 0}
     convs = await db.conversations.find(query, {"_id": 0}).sort(
@@ -544,9 +546,9 @@ async def simulate_ai_turn(conv_id: str, user: dict = Depends(current_user)):
     if last_customer:
         motivo, ai_message = detect_handoff(last_customer["text"])
         if motivo:
-            reply, summary = await do_handoff(lead, conv, motivo, ai_message)
+            reply, summary, new_status = await do_handoff(lead, conv, motivo, ai_message)
             return {"message": reply, "handoff": True, "motivo": motivo,
-                    "summary": summary, "new_status": "da_fissare"}
+                    "summary": summary, "new_status": new_status}
 
     # Altrimenti: l'AI commerciale reale genera la prossima risposta
     reply_text = await ai_generate_reply(conv, lead)
@@ -676,14 +678,14 @@ async def change_status(lead_id: str, body: StatusChange,
         raise HTTPException(400, "Stato non valido")
     from_status = lead["stato_pipeline"]
     updates = {"stato_pipeline": body.stato}
-    if body.stato == "da_fissare":
+    if body.stato in ("attesa_chiamata", "da_fissare"):
         updates["handoff_at"] = iso(now_utc())
     await db.leads.update_one({"id": lead_id}, {"$set": updates})
     await db.conversations.update_one({"lead_id": lead_id},
                                       {"$set": {"stato": body.stato}})
     if from_status != body.stato:
         await record_status_change(lead, from_status, body.stato, "staff")
-        if body.stato == "da_fissare":
+        if body.stato in ("attesa_chiamata", "da_fissare"):
             lead2 = await db.leads.find_one({"id": lead_id}, {"_id": 0})
             await create_notification("cliente_da_fissare", lead2,
                                       "Spostata manualmente in Da Fissare.")
@@ -714,7 +716,7 @@ TEMP_PRIORITY = {"molto_calda": 0, "interessata": 1, "da_coltivare": 2,
 @api.get("/home/priorities")
 async def home_priorities(user: dict = Depends(current_user)):
     leads = await db.leads.find(
-        {"stato_pipeline": "da_fissare"}, {"_id": 0}).to_list(200)
+        {"stato_pipeline": {"$in": ["attesa_chiamata", "da_fissare"]}}, {"_id": 0}).to_list(200)
 
     def sort_key(l):
         return (TEMP_PRIORITY.get(l.get("temperature"), 9),
@@ -804,8 +806,8 @@ async def analytics(period: str = "30d", sede: Optional[str] = None,
         if cnt > 0:
             risposte += 1
 
-    interessate = count("interessata") + count("da_fissare") + count("appuntamento_fissato")
-    da_fissare = count("da_fissare")
+    interessate = count("interessata") + count("attesa_chiamata") + count("da_fissare") + count("appuntamento_fissato")
+    da_fissare = count("attesa_chiamata") + count("da_fissare")
     appuntamenti = count("appuntamento_fissato")
     non_interessate = count("non_interessata")
     persi = count("persa")
@@ -820,7 +822,7 @@ async def analytics(period: str = "30d", sede: Optional[str] = None,
         camp_map.setdefault(c, {"campagna": c, "lead": 0, "da_fissare": 0,
                                 "appuntamenti": 0})
         camp_map[c]["lead"] += 1
-        if l["stato_pipeline"] == "da_fissare":
+        if l["stato_pipeline"] in ("attesa_chiamata", "da_fissare"):
             camp_map[c]["da_fissare"] += 1
         if l["stato_pipeline"] == "appuntamento_fissato":
             camp_map[c]["appuntamenti"] += 1
@@ -1276,19 +1278,51 @@ async def build_ai_system_prompt(lead: dict) -> str:
     kb = await db.knowledge_base.find_one({}, {"_id": 0}) or {}
     servizio = lead.get("servizio") or "trattamento estetico"
     svc = await db.services.find_one({"nome": servizio}, {"_id": 0}) or {}
+    try:
+        base = lead.get("data_acquisizione")
+        start = datetime.fromisoformat(base) if base else now_utc()
+    except Exception:
+        start = now_utc()
+    promo_days = int((kb or {}).get("promo_giorni", 10) or 10)
+    promo_end = (start + timedelta(days=promo_days)).astimezone(ROME_TZ).strftime("%d/%m/%Y")
+    has_price = bool((svc.get("prezzo") or "").strip())
+    has_promo = bool((svc.get("promozione") or "").strip())
+    if not has_price:
+        prezzo_rule = (
+            f"PREZZO NON DISPONIBILE: per il trattamento '{servizio}' NON hai prezzi nel sistema. "
+            f"NON inventare MAI cifre: se la cliente chiede il prezzo, di' con naturalezza che verifichi "
+            f"il dettaglio aggiornato e che lo staff la ricontatta con tutte le info.\n")
+    elif has_promo:
+        prezzo_rule = (
+            f"STRATEGIA PREZZO: quando la cliente chiede il prezzo, indica il listino e la promozione con "
+            f"i valori ESATTI dei DETTAGLI TRATTAMENTO qui sotto, e OGNI VOLTA che citi una promozione DEVI "
+            f"aggiungere la scadenza: 'valida fino al {promo_end}, fino a esaurimento posti'. "
+            f"NON usare prezzi/promo di memoria: la fonte è solo i DETTAGLI TRATTAMENTO / KNOWLEDGE BASE.\n")
+    else:
+        prezzo_rule = (
+            f"STRATEGIA PREZZO: indica il prezzo con i valori ESATTI dei DETTAGLI TRATTAMENTO qui sotto. "
+            f"NON usare prezzi di memoria e NON inventare promozioni inesistenti.\n")
     return (
         f"Sei {ASSISTANT_NAME}, assistente commerciale del centro estetico {BRAND_NAME}. "
         f"Parli in italiano, con tono caldo, femminile, empatico e professionale, in stile WhatsApp: "
         f"messaggi BREVI, naturali, mai muri di testo, una domanda alla volta.\n\n"
-        f"OBIETTIVO PRINCIPALE: portare gentilmente la cliente a fissare un appuntamento. "
-        f"Non sei un questionario: conversi in modo umano usando vendita conversazionale non aggressiva. "
-        f"Capisci il bisogno, rispondi alle domande, gestisci dubbi e obiezioni, valorizzi i benefici, "
-        f"e fai SEMPRE avanzare la conversazione. Termina quasi sempre con una domanda utile al passo "
-        f"successivo (bisogno -> interesse -> giorno -> mattina/pomeriggio -> orario -> appuntamento). "
-        f"NON chiudere con 'fammi sapere' o 'resto a disposizione': guida verso la prenotazione. "
+        f"OBIETTIVO PRINCIPALE: portare gentilmente la cliente fino all'INTERESSE concreto a prenotare. "
+        f"NON sei un questionario: conversi in modo umano, vendita conversazionale non aggressiva. "
+        f"Capisci il bisogno, rispondi alle domande, gestisci dubbi/obiezioni, valorizzi i benefici.\n"
+        f"IMPORTANTISSIMO — GESTIONE APPUNTAMENTO: NON chiedere MAI il giorno, NON proporre date o orari, "
+        f"NON far credere di avere un'agenda. Quando la cliente vuole procedere/prenotare, chiudi la parte "
+        f"automatica con una frase naturale tipo: 'Controllo le disponibilità e ti richiamo per fissare "
+        f"l'appuntamento.' Poi fermati (allo staff il resto).\n"
+        f"STILE NATURALE (fondamentale, sembra una persona reale): messaggi brevi e vari; NON iniziare con "
+        f"'Perfetto' e non usarlo MAI due volte di fila; alterna aperture ('Certo', 'Va bene', 'Benissimo', "
+        f"'Capito', 'Ottimo', 'D'accordo') ma spesso rispondi DIRETTAMENTE senza formula iniziale; usa le "
+        f"emoji solo ogni tanto e quando hanno senso, MAI cuori in ogni messaggio, MAI doppi cuori o sequenze "
+        f"di emoji; varia lunghezza, costruzione e tono; guarda gli ultimi messaggi e NON ripetere parole o "
+        f"strutture appena usate. Non rivelare mai di essere un assistente automatico o un'AI.\n"
+        f"{prezzo_rule}"
         f"Quando indichi un prezzo, prima capisci l'obiettivo della cliente, poi proponi la soluzione.\n\n"
-        f"REGOLA FONDAMENTALE: non inventare mai informazioni. Se non conosci una risposta, di' che "
-        f"farai intervenire lo staff.\n\n"
+        f"REGOLA FONDAMENTALE: non inventare mai informazioni (prezzi, promo, risultati). Se non conosci una "
+        f"risposta, di' che verifichi con il team e che lo staff ricontatta.\n\n"
         f"CONTESTO LEAD: nome={lead.get('nome')}, trattamento d'interesse={servizio}, "
         f"sede={lead.get('sede') or 'NON INDICATA'}, campagna={lead.get('campagna')}.\n"
         f"SEDI DISPONIBILI: Milano e Verona. Se la sede del lead è NON INDICATA, a un certo "
@@ -1521,7 +1555,7 @@ async def _send_one_followup(fu: dict):
         await db.followups.update_one({"id": fu["id"]}, {"$set": {"status": "annullato"}})
         return
     # Se la cliente è già avanzata (ha risposto / handoff / prenotata), salta
-    if lead.get("stato_pipeline") in ("da_fissare", "prenotato", "perso", "cliente"):
+    if lead.get("stato_pipeline") in ("attesa_chiamata", "da_fissare", "prenotato", "perso", "cliente"):
         await db.followups.update_one({"id": fu["id"]}, {"$set": {"status": "annullato"}})
         return
     conv = await db.conversations.find_one({"lead_id": lead["id"]}, {"_id": 0})

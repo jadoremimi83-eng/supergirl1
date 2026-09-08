@@ -385,7 +385,7 @@ async def seed_database(db):
         "Camilla", "Villa", "+39 334 7654321", "camilla.villa@email.it",
         svc["Laser Epilazione Definitiva"], "Verona",
         "Epilazione Definitiva", "Promo Pacchetto Ascelle+Inguine",
-        "da_fissare", "molto_calda", 1, "Sara Operatrice", False, 0,
+        "attesa_chiamata", "molto_calda", 1, "Sara Operatrice", False, 0,
         [("cliente", "Buongiorno, mi interessa il pacchetto ascelle e inguine",
           t(1, 0)),
          ("ai", "Ciao Camilla! Ottima scelta 😊 Il pacchetto è in promo a €399. "
@@ -476,7 +476,7 @@ async def seed_database(db):
                 "id": str(uuid.uuid4()), "lead_id": l["id"],
                 "from_status": "nuovo_lead", "to_status": l["stato_pipeline"],
                 "changed_by": "ai" if l["stato_pipeline"] in
-                ("ai_conversazione", "in_attesa", "da_fissare") else "staff",
+                ("ai_conversazione", "in_attesa", "attesa_chiamata", "da_fissare") else "staff",
                 "created_at": l["ultimo_contatto"],
             })
     await db.lead_status_history.insert_many(history)

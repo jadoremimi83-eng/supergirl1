@@ -113,3 +113,13 @@ admin@supergirl.app / Admin123! · operatore@supergirl.app / Operatore123!
 - Etichetta chat: rimosso "· AI" → in conversation/[id].tsx ora la bolla mostra solo il nome assistente ("Andrea"). Il flag AI resta interno (sender="ai" nel DB).
 - Typing indicator: nuovo helper whatsapp_send_typing(message_id) → POST /{pnid}/messages con status=read + typing_indicator{type:text}. Chiamato in handle_inbound_wa subito dopo il guard ai_attiva (prima di ai_generate_reply). Mostra "Andrea sta scrivendo…" fino a ~25s o fino all'invio della risposta. Non blocca (try/except).
 - Follow-up automatici (2 step 4h+giorno dopo, orari 9-19, testi modificabili + message_options), segmentazione (/segments + filtri /leads + UI chip in clienti.tsx), push notifiche, template nuovo_lead_foto + promemoria_followup (PENDING): TUTTO richiede un unico Publish->Deploy per andare live in produzione.
+
+## Nuovo stato "IN ATTESA DI CHIAMATA" + hardening prezzi AI (2026-06, sessione fork)
+- NUOVO stato pipeline `attesa_chiamata` (label "IN ATTESA DI CHIAMATA", order 5) aggiunto a PIPELINE_STAGES e a STAGES (theme.ts). È il target dell'handoff AI su intenzione di prenotare: `do_handoff` con motivo="prenotazione" → `attesa_chiamata` (gli altri motivi restano `da_fissare`). Messaggio handoff aggiornato: "Benissimo! Controllo subito le disponibilità e ti richiamo io a breve...".
+- Home /home/priorities e filtro conversazioni "da_fissare" includono ora sia `attesa_chiamata` sia `da_fissare`. Analytics conteggia `attesa_chiamata` come booking-ready. _send_one_followup salta anche `attesa_chiamata`. change_status gestisce `attesa_chiamata` (handoff_at + notifica).
+- Frontend: pipeline colonna evidenziata (star) + espansa di default; chat badge star anche per attesa_chiamata; scheda cliente usa STAGES keys → picker aggiornato automaticamente.
+- Seed: Camilla → attesa_chiamata, Beatrice → da_fissare (una lead per colonna in demo).
+- HARDENING PREZZI AI (build_ai_system_prompt): se il servizio NON ha prezzo nel DB → l'AI NON inventa e dice che verifica col team; se ha promozione → DEVE sempre citare la scadenza dinamica (promo_end gg/mm/aaaa); usa solo valori DB/KB. Verificato via curl (Bomba: prezzo esatto + "valida fino al 18/09/2026").
+- Fix dati demo: rimosso servizio orfano 'Laser Diodo' (non presente in services) → collezioni demo ripopolate dal seed pulito (integration_config WhatsApp preservato).
+- TEST: testing_agent E2E backend PASS (10-11/11) — handoff→attesa_chiamata, tono naturale (no "AI", no "Perfetto" ripetuto), pipeline/home/config includono lo stato. Report: /app/test_reports/iteration_5.json.
+- PROSSIMO: P1 "Training Andrea" (UI Admin per KB/servizi/prezzi/promo), P1 Meta Lead Ads reali (attesa Page ID + Page Access Token utente).

@@ -1,0 +1,51 @@
+{
+  "summary": "Backend-only E2E test for the new pipeline stage 'attesa_chiamata' (IN ATTESA DI CHIAMATA) and the natural conversational AI 'Andrea' (J'adore Mimì). Built /app/backend/tests/test_attesa_chiamata_e2e.py (11 tests): multi-turn conversation via /simulate-customer + /simulate-ai-turn, then verifies handoff, pipeline, priorities, notifications and follow-ups. 10/11 pass on the happy run using service 'Bomba' (present in KB). GET /api/pipeline, /api/config/stages and /api/home/priorities all correctly include the new stage. Handoff on 'vorrei prenotare un appuntamento' correctly returns handoff=True, motivo='prenotazione', new_status='attesa_chiamata', moves the lead to attesa_chiamata, sets ai_attiva=False on the conversation, creates a 'cliente_da_fissare' notification, and cancels programmed follow-ups. AI tone checks pass consistently: never uses 'AI'/'assistente automatico', does not over-open with 'Perfetto', and never repeats the same opening on consecutive turns. One flaky finding on the price/promo strategy (see below).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "AI system prompt (build_ai_system_prompt in /app/backend/server.py) via /api/conversations/{id}/simulate-ai-turn",
+        "issue": "The prompt requires the full price strategy template with expiry date: 'Il prezzo di listino è €[LISTINO]. In questo momento siamo in promozione al [SCONTO], quindi il trattamento è a €[PROMO]. La promozione è valida fino al {promo_end}...'. In practice the LLM often gives a partial promo (e.g. 'sulla Bomba abbiamo la prima seduta di prova a €49') WITHOUT the listino/scadenza date. Reproduced on 1/2 test runs against service 'Bomba'. The scadenza date (dd/mm/yyyy) is required by the user's spec and is sometimes missing."
+      },
+      {
+        "endpoint": "seed_data.py / knowledge base coverage",
+        "issue": "The seeded services list (Bomba, Model Leg, Lifting Colombiano, Fire Cupping, Bambolona) does NOT include 'Laser Diodo', which is referenced in ig_captions (line 305, 'Video Laser Diodo') and appears in demo campaign 'inserzioni' (line 139, 'Video Laser Diodo'). When a lead comes in with servizio='Laser Diodo', the AI has no listino/promo data in KB and either invents a price ('€50 a zona') or defers ('valutazione'), violating the prompt rule 'NON usare prezzi o promo di memoria'. Either add Laser Diodo to services or remove it from campaigns/inserzioni."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_attesa_chiamata_e2e.py",
+    "/app/test_reports/pytest/pytest_attesa_chiamata.xml"
+  ],
+  "action_items": [
+    "Tighten the price-strategy in build_ai_system_prompt to make the promo template MANDATORY when disclosing any price: could be enforced via a stricter instruction ('SE menzioni un prezzo DEVI includere listino, promo E la data di scadenza gg/mm/aaaa; altrimenti chiedi ancora un dettaglio prima di dare il prezzo') or via a deterministic server-side response builder that overlays the listino/promo/scadenza structure whenever detect_price_intent(customer_msg) fires and a KB match exists.",
+    "Fix KB coverage: either add a 'Laser Diodo' service to seed_data.py services list (with prezzo, promozione, faq, immagine) OR remove references to 'Laser Diodo' from campaigns/inserzioni/ig_captions to avoid the AI being forced to answer without KB data.",
+    "Consider persisting the promo_end date on the lead at creation time (deterministic) so it stays stable across turns instead of being recomputed inside the prompt every request (currently computed from data_acquisizione each build)."
+  ],
+  "critical_code_review_comments": [
+    "server.py is 1954 lines - well past the 700-line guideline. Consider splitting into modules (auth, leads, conversations, ai, integrations, analytics, notifications).",
+    "detect_handoff uses simple keyword matching on BOOKING_KEYWORDS. False-positive risk: any customer message containing 'disponibil' or 'prossima settimana' triggers handoff to attesa_chiamata even without real booking intent. Consider raising the bar (e.g., require BOOKING_KEYWORDS + affirmative context, or let the LLM classify intent).",
+    "PIPELINE_STAGES has BOTH 'attesa_chiamata' (order 5) and 'da_fissare' (order 6) with similar semantics ('cliente da fissare'). Home/priorities and analytics treat them as equivalent. If the intent was to REPLACE 'da_fissare' by 'attesa_chiamata', keeping both is confusing; do_handoff routes prenotazione->attesa_chiamata and everything else (richiesta_operatore, situazione_delicata)->da_fissare, which means richiesta_operatore/situazione_delicata leads end up mixed with the booking-ready lane. Verify this is intentional.",
+    "GET /api/home/priorities returns key 'da_fissare' (list) while the semantic stage is now 'attesa_chiamata'+'da_fissare'. The key name is misleading now that attesa_chiamata is a separate stage. Consider renaming to 'priorities' or 'da_richiamare' for clarity."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_attesa_chiamata_e2e.py (new)",
+    "/app/test_reports/pytest/pytest_attesa_chiamata.xml (new, from pytest --junitxml)",
+    "/app/test_reports/iteration_5.json (this report)"
+  ],
+  "success_rate": {
+    "backend": "10-11/11 (91-100%) - see rca_of_issue for the flaky price-scadenza check",
+    "frontend": "not tested (backend-only request)"
+  },
+  "seed_data_creation": "Created 2 test leads via POST /api/integrations/meta/simulate with nome='TESTE2E' cognome='Naturale' — one for the automated pytest suite and one for the probe script /tmp/probe_price.py. No DELETE /api/leads endpoint exists, so cleanup by API was not possible; test data can be identified/removed manually by filtering leads where nome='TESTE2E'.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "The suite is /app/backend/tests/test_attesa_chiamata_e2e.py (pytest, real LLM calls, ~17s wall-time). Use `pytest backend/tests/test_attesa_chiamata_e2e.py -v --tb=short -n 0` (the repo's pytest.ini forces -n 2 --dist loadscope which needs xdist; -n 0 forces serial). Fixtures are module-scoped, so all tests share the same created lead + conversation. GET /api/leads/{id} returns {\"lead\":{},\"conversation_id\":..,\"history\":[]} (unwrap 'lead'). GET /api/conversations/{id} returns {\"conversation\":{},\"lead\":{},\"messages\":[]}. GET /api/home/priorities returns {\"da_fissare\":[...],\"total_leads\":N,\"count\":..}. GET /api/notifications returns {\"notifications\":[...],\"unread\":N}. Use service='Bomba' (present in KB) for price-strategy tests; 'Laser Diodo' is referenced in campaigns but has no KB entry.",
+  "rca_of_issue": "Flaky test: test_ai_price_strategy_has_future_expiry_date. Reproduction: run the suite; on some runs the AI reply for 'Quanto costa?'/'Ci sono promozioni?' does NOT contain a dd/mm/yyyy date, even though the system prompt (build_ai_system_prompt) explicitly injects `promo_end = (data_acquisizione + kb.promo_giorni) formatted as dd/mm/yyyy` and instructs 'La promozione è valida fino al {promo_end}'. Observed AI replies: (a) 'Sì 😊 sulla Bomba abbiamo la prima seduta di prova a €49...' (NO scadenza) — FAIL; (b) 'Il prezzo di listino è €90 · Pacchetto 5 sedute €399. In promozione la prima seduta di prova a €49, valida fino al 18/09/2026...' (has scadenza) — PASS. Root cause: the LLM (gpt-5.4) does not consistently follow the strict template when the customer's phrasing is loose ('ci sono promozioni?' vs 'quanto costa?'), and it happily uses the KB 'promozione' string ('Prima seduta di prova a €49') without wrapping it in the required listino+sconto+scadenza template. Mitigation options: (1) tighten the prompt to a hard rule ('QUALSIASI menzione di un prezzo o promo DEVE terminare con: \"Valida fino al gg/mm/aaaa\" — non farlo è un errore'), (2) inject a few-shot example directly in the system prompt, or (3) post-process AI replies server-side: if reply contains €/euro/listino/promo and no dd/mm/yyyy, append 'Promo valida fino al {promo_end}.' before storing. This is a business/AI-tuning issue, NOT a code bug — I did not change the prompt because that is main-agent scope."
+}
