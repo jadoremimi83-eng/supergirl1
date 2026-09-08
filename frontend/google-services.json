@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "123458163235",
+    "project_id": "super-girl-5dcb8",
+    "storage_bucket": "super-girl-5dcb8.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:123458163235:android:93872f56900fa09be81796",
+        "android_client_info": {
+          "package_name": "com.emergent.aiconversion.pj7r40"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBt4Mjt3E1iG7HDwVkVZznv2IC3QaxggL0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

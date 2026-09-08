@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useState } from "react";
 import { storage } from "@/src/utils/storage";
 import { TOKEN_KEY } from "@/src/api";
+import { registerForPush } from "@/src/push";
 
 const BASE = process.env.EXPO_PUBLIC_BACKEND_URL;
 
@@ -34,8 +35,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           const res = await fetch(`${BASE}/api/auth/me`, {
             headers: { Authorization: `Bearer ${token}` },
           });
-          if (res.ok) setUser(await res.json());
-          else await storage.secureRemove(TOKEN_KEY);
+          if (res.ok) {
+            const u = await res.json();
+            setUser(u);
+            registerForPush(u.id);
+          } else await storage.secureRemove(TOKEN_KEY);
         } catch {
           await storage.secureRemove(TOKEN_KEY);
         }
@@ -57,6 +61,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const data = await res.json();
     await storage.secureSet(TOKEN_KEY, data.access_token);
     setUser(data.user);
+    registerForPush(data.user.id);
   };
 
   const logout = async () => {

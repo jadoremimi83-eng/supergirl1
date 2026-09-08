@@ -22,6 +22,7 @@
       },
       "edgeToEdgeEnabled": true,
       "package": "com.emergent.aiconversion.pj7r40",
+      "googleServicesFile": "./google-services.json",
       "permissions": ["READ_MEDIA_IMAGES"]
     },
     "web": {
@@ -32,6 +33,7 @@
     "plugins": [
       "expo-router",
       "expo-image-picker",
+      "expo-notifications",
       [
         "expo-splash-screen",
         {

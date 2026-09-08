@@ -272,6 +272,52 @@ async def create_notification(tipo: str, lead: dict, extra: str = ""):
     await db.notifications.insert_one(notif)
 
 
+# --- Push notifications (Emergent managed relay) ---
+PUSH_BASE_URL = "https://integrations.emergentagent.com"
+PUSH_KEY = os.environ.get("EMERGENT_PUSH_KEY", "placeholder")
+_push_client = httpx.AsyncClient(
+    base_url=PUSH_BASE_URL, headers={"X-Push-Key": PUSH_KEY}, timeout=10.0)
+
+
+class RegisterPushBody(BaseModel):
+    user_id: str
+    platform: str
+    device_token: str
+
+
+@api.post("/register-push", status_code=201)
+async def register_push(body: RegisterPushBody):
+    resp = await _push_client.post("/api/v1/push/users/register", json=body.dict())
+    if resp.status_code == 401:
+        raise HTTPException(500, "EMERGENT_PUSH_KEY missing or invalid")
+    if resp.status_code >= 500:
+        raise HTTPException(502, "Push provider unavailable")
+    resp.raise_for_status()
+    return {"status": "registered"}
+
+
+async def send_push(recipients: list, data: dict, idempotency_key: str = None) -> None:
+    if not recipients:
+        return
+    if "title" not in data or "message" not in data:
+        raise ValueError("data must include title and message")
+    payload = {"recipients": recipients[:100], "data": data}
+    if idempotency_key:
+        payload["$idempotency_key"] = idempotency_key
+    resp = await _push_client.post("/api/v1/push/trigger", json=payload)
+    resp.raise_for_status()
+
+
+async def notify_staff_push(title: str, message: str, action_url: str):
+    """Invia una push a tutto lo staff (admin+operatori). Non bloccante."""
+    try:
+        staff = await db.users.find({}, {"_id": 0, "id": 1}).to_list(200)
+        ids = [u["id"] for u in staff if u.get("id")]
+        await send_push(ids, {"title": title, "message": message, "action_url": action_url})
+    except Exception as e:
+        logger.warning(f"Push failed (non-blocking): {e}")
+
+
 async def record_status_change(lead: dict, from_status: str, to_status: str,
                                changed_by: str):
     await db.lead_status_history.insert_one({
@@ -330,6 +376,18 @@ async def do_handoff(lead: dict, conv: dict, motivo: str, ai_message: str):
     })
     tipo = "cliente_da_fissare" if motivo == "prenotazione" else "ai_intervento"
     await create_notification(tipo, lead, ai_message)
+    if motivo == "prenotazione":
+        nome = f"{lead['nome']} {lead['cognome']}".strip()
+        extra = ""
+        if lead.get("servizio"):
+            extra += f" · {lead['servizio']}"
+        if lead.get("sede"):
+            extra += f" · {lead['sede']}"
+        await notify_staff_push(
+            "Nuovo appuntamento da fissare 💎",
+            f"{nome} vuole fissare un appuntamento{extra}",
+            f"/conversation/{conv['id']}",
+        )
     clean_msg = {k: v for k, v in msg.items() if k != "_id"}
     return clean_msg, summary
 
