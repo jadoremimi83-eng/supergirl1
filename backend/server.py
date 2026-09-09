@@ -52,6 +52,8 @@ META_PAGE_ACCESS_TOKEN = os.environ.get("META_PAGE_ACCESS_TOKEN", "REPLACE_ME")
 META_PAGE_ID = os.environ.get("META_PAGE_ID", "REPLACE_ME")
 META_VERIFY_TOKEN = os.environ.get("META_VERIFY_TOKEN", "")
 META_API_VERSION = os.environ.get("META_API_VERSION", "v21.0")
+# Regola di importazione: SOLO i moduli Meta il cui nome inizia con questo prefisso.
+SG_FORM_PREFIX = os.environ.get("META_FORM_PREFIX", "SG -")
 GRAPH = f"https://graph.facebook.com/{META_API_VERSION}"
 
 # --- AI reale (Emergent universal key) ---
@@ -1106,6 +1108,7 @@ async def ingest_meta_lead(data: dict) -> dict:
         "operatore_assegnato": None, "esigenza": "", "obiezioni": "",
         "note_staff": "", "ai_summary": None, "handoff_at": None,
         "leadgen_id": leadgen_id, "origine": "meta",
+        "form_id": data.get("form_id"), "form_name": data.get("form_name"),
     }
     await db.leads.insert_one(lead)
 
@@ -1165,11 +1168,42 @@ def _field_map(field_data: list) -> dict:
             for x in field_data if x.get("name")}
 
 
+async def get_form_name(form_id: str, lead_obj: dict) -> Optional[str]:
+    """Nome del modulo Meta: dal nodo lead (form{name}) o, in fallback, dal form_id."""
+    name = ((lead_obj.get("form") or {}) or {}).get("name")
+    if name:
+        return name
+    if form_id:
+        try:
+            return (await graph_get(form_id, "id,name")).get("name")
+        except Exception:  # noqa
+            return None
+    return None
+
+
+def form_name_allowed(name: Optional[str]) -> bool:
+    """Regola: importa SOLO i moduli il cui nome inizia con SG_FORM_PREFIX (es. 'SG -').
+    Fail-closed: se il nome non è disponibile, NON importare (protegge i moduli dell'agenzia)."""
+    if not name:
+        return False
+    return name.strip().upper().startswith(SG_FORM_PREFIX.strip().upper())
+
+
 async def retrieve_and_ingest(leadgen_id: str, event: dict):
-    """Recupera i dati completi del lead da Graph API e li ingesta."""
+    """Recupera i dati completi del lead da Graph API e li ingesta.
+    Applica la regola SG_FORM_PREFIX: solo i moduli il cui nome inizia con 'SG -'."""
     lead = await graph_get(
         leadgen_id,
-        "id,created_time,form_id,ad_id,adset_id,campaign_id,field_data")
+        "id,created_time,form_id,ad_id,adset_id,campaign_id,field_data,form{id,name,status}")
+    form_id = ((lead.get("form") or {}) or {}).get("id") or lead.get("form_id") or event.get("form_id")
+    form_name = await get_form_name(form_id, lead)
+    # >>> REGOLA SOLO-BACKEND: ignora tutto ciò che non inizia con 'SG -' <<<
+    if not form_name_allowed(form_name):
+        logger.info(
+            f"Meta lead IGNORATO: modulo '{form_name}' (form_id={form_id}) non inizia con "
+            f"'{SG_FORM_PREFIX}'. Nessun lead importato in Super Girl.")
+        return {"skipped": True, "reason": "form_prefix", "form_name": form_name,
+                "form_id": form_id}
     values = _field_map(lead.get("field_data", []))
     full = values.get("full_name") or ""
     parts = full.split(" ", 1)
@@ -1187,6 +1221,7 @@ async def retrieve_and_ingest(leadgen_id: str, event: dict):
             pass
     return await ingest_meta_lead({
         "leadgen_id": lead.get("id", leadgen_id),
+        "form_id": form_id, "form_name": form_name,
         "nome": nome, "cognome": cognome,
         "telefono": values.get("phone_number") or values.get("phone"),
         "email": values.get("email"),
@@ -1218,12 +1253,25 @@ async def meta_webhook(request: Request):
     payload = await request.json()
     if payload.get("object") != "page":
         return {"ok": True}
+    filter_mode = await get_meta_filter_mode()
+    enabled_forms = await meta_enabled_form_ids() if filter_mode == "whitelist" else None
     for entry in payload.get("entry", []):
         for change in entry.get("changes", []):
             if change.get("field") != "leadgen":
                 continue
             value = change.get("value", {})
             leadgen_id = value.get("leadgen_id")
+            form_id = value.get("form_id")
+            # Auto-scoperta: registra il modulo così l'admin può attivarlo dall'app
+            if form_id:
+                await db.meta_forms.update_one(
+                    {"form_id": form_id},
+                    {"$setOnInsert": {"form_id": form_id, "enabled": False, "name": None},
+                     "$set": {"last_seen": iso(now_utc())}}, upsert=True)
+            # Filtro per modulo: in modalità whitelist acquisisce SOLO i moduli attivati
+            if filter_mode == "whitelist" and (not form_id or form_id not in enabled_forms):
+                logger.info(f"Meta lead ignorato (modulo {form_id} non attivo in Super Girl)")
+                continue
             if leadgen_id and meta_configured():
                 try:
                     await retrieve_and_ingest(leadgen_id, value)
@@ -1245,7 +1293,83 @@ async def meta_status(user: dict = Depends(current_user)):
         "webhook_path": "/api/integrations/meta/webhook",
         "subscribe_field": "leadgen",
         "api_version": META_API_VERSION,
+        "filter_mode": await get_meta_filter_mode(),
+        "enabled_forms": await db.meta_forms.count_documents({"enabled": True}),
     }
+
+
+# --- Filtro moduli (form_id): whitelist gestibile dall'app --------------------
+async def get_meta_filter_mode() -> str:
+    """'all' = acquisisci tutti i moduli; 'whitelist' = solo i moduli attivati."""
+    doc = await db.meta_settings.find_one({"id": "meta"}, {"_id": 0})
+    return (doc or {}).get("filter_mode", "all")
+
+
+async def meta_enabled_form_ids() -> set:
+    docs = await db.meta_forms.find({"enabled": True}, {"_id": 0, "form_id": 1}).to_list(500)
+    return {d["form_id"] for d in docs}
+
+
+class FilterModeInput(BaseModel):
+    mode: str  # "all" | "whitelist"
+
+
+class FormToggle(BaseModel):
+    enabled: bool
+    name: Optional[str] = None
+
+
+@api.get("/integrations/meta/forms")
+async def list_meta_forms(user: dict = Depends(require_admin)):
+    """Elenca i moduli lead della Pagina (Graph API) con lo stato di attivazione."""
+    mode = await get_meta_filter_mode()
+    if not meta_configured():
+        return {"configured": False, "filter_mode": mode, "forms": [],
+                "error": "Integrazione Meta non ancora configurata."}
+    try:
+        data = await graph_get(
+            META_PAGE_ID,
+            "leadgen_forms.limit(200){id,name,status,locale,leads_count}")
+        raw = (data.get("leadgen_forms") or {}).get("data", [])
+    except Exception as e:  # noqa
+        saved = await db.meta_forms.find({}, {"_id": 0}).to_list(500)
+        return {"configured": True, "filter_mode": mode, "forms": saved,
+                "error": str(e)[:200]}
+    saved = {d["form_id"]: d for d in
+             await db.meta_forms.find({}, {"_id": 0}).to_list(500)}
+    out = []
+    for f in raw:
+        fid = f.get("id")
+        enabled = bool(saved.get(fid, {}).get("enabled", False))
+        await db.meta_forms.update_one(
+            {"form_id": fid},
+            {"$set": {"form_id": fid, "name": f.get("name"),
+                      "status": f.get("status"), "leads_count": f.get("leads_count")},
+             "$setOnInsert": {"enabled": False}}, upsert=True)
+        out.append({"form_id": fid, "name": f.get("name"),
+                    "status": f.get("status"), "leads_count": f.get("leads_count"),
+                    "enabled": enabled})
+    return {"configured": True, "filter_mode": mode, "forms": out, "error": None}
+
+
+@api.post("/integrations/meta/forms/{form_id}")
+async def toggle_meta_form(form_id: str, body: FormToggle,
+                           user: dict = Depends(require_admin)):
+    await db.meta_forms.update_one(
+        {"form_id": form_id},
+        {"$set": {"form_id": form_id, "enabled": body.enabled,
+                  **({"name": body.name} if body.name else {})}}, upsert=True)
+    return {"ok": True, "form_id": form_id, "enabled": body.enabled}
+
+
+@api.post("/integrations/meta/filter-mode")
+async def set_meta_filter_mode(body: FilterModeInput,
+                               user: dict = Depends(require_admin)):
+    mode = body.mode if body.mode in ("all", "whitelist") else "all"
+    await db.meta_settings.update_one({"id": "meta"},
+                                      {"$set": {"id": "meta", "filter_mode": mode}},
+                                      upsert=True)
+    return {"ok": True, "filter_mode": mode}
 
 
 class SimLeadInput(BaseModel):
