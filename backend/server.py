@@ -2133,7 +2133,7 @@ async def get_stages(user: dict = Depends(current_user)):
 
 @api.get("/")
 async def root():
-    return {"app": "SUPER GIRL API", "status": "ok"}
+    return {"app": "SUPER GIRL API", "status": "ok", "version": "sg-ctwa-1"}
 
 
 @api.get("/privacy", response_class=HTMLResponse)
