@@ -5,6 +5,7 @@ qui, dietro funzioni controllate, così la Fase 4 (AI reale) potrà sostituire
 l'implementazione interna senza toccare frontend o schema.
 """
 import os
+import re
 import uuid
 import hmac
 import hashlib
@@ -54,6 +55,12 @@ META_VERIFY_TOKEN = os.environ.get("META_VERIFY_TOKEN", "")
 META_API_VERSION = os.environ.get("META_API_VERSION", "v21.0")
 # Regola di importazione: SOLO i moduli Meta il cui nome inizia con questo prefisso.
 SG_FORM_PREFIX = os.environ.get("META_FORM_PREFIX", "SG -")
+# Prefisso SG- (accetta "SG-", "SG -", case-insensitive) per moduli, campagne e annunci.
+SG_PREFIX_RE = re.compile(r"^\s*SG\s*-", re.IGNORECASE)
+
+
+def sg_prefixed(name) -> bool:
+    return bool(name and SG_PREFIX_RE.match(str(name)))
 GRAPH = f"https://graph.facebook.com/{META_API_VERSION}"
 
 # --- AI reale (Emergent universal key) ---
@@ -1182,11 +1189,9 @@ async def get_form_name(form_id: str, lead_obj: dict) -> Optional[str]:
 
 
 def form_name_allowed(name: Optional[str]) -> bool:
-    """Regola: importa SOLO i moduli il cui nome inizia con SG_FORM_PREFIX (es. 'SG -').
+    """Regola: importa SOLO i moduli il cui nome inizia con 'SG -' (o 'SG-').
     Fail-closed: se il nome non è disponibile, NON importare (protegge i moduli dell'agenzia)."""
-    if not name:
-        return False
-    return name.strip().upper().startswith(SG_FORM_PREFIX.strip().upper())
+    return sg_prefixed(name)
 
 
 async def retrieve_and_ingest(leadgen_id: str, event: dict):
@@ -1861,8 +1866,33 @@ async def _safe_handle_inbound(m: dict, value: dict):
         logger.error(f"inbound handler error: {e}")
 
 
-async def create_inbound_lead(wa_from: str, value: dict):
-    """Crea un lead + conversazione per un contatto WhatsApp organico (numero non ancora lead)."""
+async def ctwa_ad_info(referral: dict):
+    """Per un messaggio WhatsApp arrivato da un annuncio (Click-to-WhatsApp):
+    risale a nome annuncio + campagna via Graph (source_id = ad id).
+    Ritorna (allowed_SG, campagna, inserzione, piattaforma)."""
+    ad_id = (referral or {}).get("source_id")
+    camp_name, ad_name, platform = None, None, "WhatsApp"
+    if ad_id:
+        try:
+            ad = await graph_get(
+                ad_id, "id,name,campaign{id,name},creative{id,instagram_actor_id}")
+            ad_name = ad.get("name")
+            camp_name = (ad.get("campaign") or {}).get("name")
+            if (ad.get("creative") or {}).get("instagram_actor_id"):
+                platform = "Instagram"
+            else:
+                platform = "Facebook"
+        except Exception as e:  # noqa
+            logger.warning(f"CTWA ad lookup fallito ({ad_id}): {e}")
+    # Fail-closed: attiva SOLO se annuncio o campagna hanno prefisso SG-
+    allowed = sg_prefixed(ad_name) or sg_prefixed(camp_name)
+    return allowed, camp_name, ad_name, platform
+
+
+async def create_inbound_lead(wa_from: str, value: dict, campagna: str = "WhatsApp Diretto",
+                              inserzione: str = "Contatto Organico", piattaforma: str = "WhatsApp",
+                              origine: str = "whatsapp_organico"):
+    """Crea un lead + conversazione per un contatto WhatsApp (organico o da annuncio SG-)."""
     now = iso(now_utc())
     contacts = value.get("contacts", [])
     profile_name = ""
@@ -1874,14 +1904,14 @@ async def create_inbound_lead(wa_from: str, value: dict):
         "id": lid, "nome": profile_name or "Cliente WhatsApp", "cognome": "",
         "telefono": tel, "email": "",
         "servizio": "", "sede": "",
-        "campagna": "WhatsApp Diretto", "inserzione": "Contatto Organico",
-        "piattaforma": "WhatsApp",
+        "campagna": campagna, "inserzione": inserzione,
+        "piattaforma": piattaforma,
         "ig_username": None, "ig_display_name": None, "foto_profilo": None,
         "data_acquisizione": now, "ultimo_contatto": now,
         "stato_pipeline": "ai_conversazione", "temperature": "da_coltivare",
         "operatore_assegnato": None, "esigenza": "", "obiezioni": "",
         "note_staff": "", "ai_summary": None, "handoff_at": None,
-        "leadgen_id": None, "origine": "whatsapp_organico",
+        "leadgen_id": None, "origine": origine,
     }
     await db.leads.insert_one(lead)
     cid = str(uuid.uuid4())
@@ -1929,7 +1959,22 @@ async def handle_inbound_wa(m: dict, value: dict):
         {"telefono": {"$regex": wa_from[-9:]}}, {"_id": 0})
     conv = await db.conversations.find_one({"lead_id": lead["id"]}, {"_id": 0}) if lead else None
     if not lead or not conv:
-        lead, conv = await create_inbound_lead(wa_from, value)
+        referral = m.get("referral") or {}
+        if referral.get("source_id") or referral.get("source_type") == "ad":
+            # Messaggio da annuncio (Click-to-WhatsApp): separa per prefisso SG-
+            allowed, camp_name, ad_name, platform = await ctwa_ad_info(referral)
+            if not allowed:
+                logger.info(
+                    f"WhatsApp da annuncio NON-SG ignorato (ad='{ad_name}', camp='{camp_name}', "
+                    f"source_id={referral.get('source_id')}). Super Girl non interviene.")
+                return  # campagne dell'agenzia: nessun intervento
+            lead, conv = await create_inbound_lead(
+                wa_from, value, campagna=camp_name or "Click-to-WhatsApp",
+                inserzione=ad_name or "Annuncio", piattaforma=platform,
+                origine="whatsapp_ad")
+        else:
+            # Contatto organico (nessun annuncio): comportamento standard
+            lead, conv = await create_inbound_lead(wa_from, value)
     await db.messages.insert_one({
         "id": str(uuid.uuid4()), "conversation_id": conv["id"], "sender": "cliente",
         "text": text, "type": "text", "created_at": iso(now_utc()), "read": False,
