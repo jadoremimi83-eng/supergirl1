@@ -21,12 +21,27 @@ export default function Integrazioni() {
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
-    try { setData(await api.get("/integrations")); } catch {}
-    setLoading(false);
+    setLoading(true);
+    try { setData(await api.get("/integrations")); }
+    catch { setData(null); }
+    finally { setLoading(false); }
   }, []);
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
-  if (loading || !data) return <View style={{ flex: 1, backgroundColor: colors.surface }}><SubHeader title="Integrazioni" /><Loading /></View>;
+  if (loading) return <View style={{ flex: 1, backgroundColor: colors.surface }}><SubHeader title="Integrazioni" /><Loading /></View>;
+  if (!data) return (
+    <View style={{ flex: 1, backgroundColor: colors.surface }}>
+      <SubHeader title="Integrazioni" />
+      <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: spacing.xl }}>
+        <Feather name="wifi-off" size={28} color={colors.onSurfaceTertiary} />
+        <Text style={{ color: colors.onSurface, fontSize: 15, fontWeight: "700", marginTop: spacing.md }}>Impossibile caricare le integrazioni</Text>
+        <Text style={{ color: colors.onSurfaceTertiary, fontSize: 12.5, textAlign: "center", marginTop: 4 }}>Controlla la connessione e riprova.</Text>
+        <Pressable onPress={load} style={{ marginTop: spacing.lg, backgroundColor: colors.brandPrimary, paddingHorizontal: spacing.xl, paddingVertical: 12, borderRadius: radius.sm }}>
+          <Text style={{ color: colors.onBrandPrimary, fontWeight: "700" }}>Riprova</Text>
+        </Pressable>
+      </View>
+    </View>
+  );
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.surface }}>
