@@ -9,10 +9,10 @@ export default function TabsLayout() {
   const insets = useSafeAreaInsets();
   // Spazio extra sotto le icone oltre alla safe-area di sistema, così la barra
   // non finisce mai sopra la navigation bar di Android e resta comoda da toccare.
-  const extra = Platform.OS === "web" ? 16 : 10;
+  const extra = Platform.OS === "web" ? 22 : 10;
   const padBottom = insets.bottom + extra;
-  const paddingTop = 8;
-  const iconLabelArea = 52; // area riservata a icona + etichetta (sempre visibili)
+  const paddingTop = 10;
+  const iconLabelArea = 56; // area riservata a icona + etichetta (sempre visibili)
   const barHeight = paddingTop + iconLabelArea + padBottom;
 
   return (

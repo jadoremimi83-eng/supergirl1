@@ -39,7 +39,7 @@ export default function Priorities() {
   const router = useRouter();
   const { user } = useAuth();
   const { assistant } = useAssistant();
-  const [data, setData] = useState<{ da_fissare: Priority[]; total_leads: number; count: number } | null>(null);
+  const [data, setData] = useState<{ da_fissare: Priority[]; corso_da_chiamare?: Priority[]; total_leads: number; count: number } | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -164,6 +164,65 @@ export default function Priorities() {
                   </View>
                 </View>
                 <Feather name="message-circle" size={20} color={colors.brandPrimary} />
+              </Pressable>
+            ))
+          )}
+
+          <View style={[styles.sectionHead, { marginTop: spacing["2xl"] }]}>
+            <View style={[styles.sectionDot, { backgroundColor: colors.brandSecondary }]} />
+            <Text style={styles.sectionTitle}>CONTATTI CORSO DA CHIAMARE</Text>
+          </View>
+          <Text style={styles.sectionSub}>
+            Contatti provenienti dai corsi — da richiamare subito
+          </Text>
+          {!data?.corso_da_chiamare?.length ? (
+            <View style={{ marginTop: spacing.md }}>
+              <EmptyState
+                icon="book-open"
+                title="Nessun contatto corso"
+                subtitle="Qui compaiono i contatti dei corsi da richiamare."
+              />
+            </View>
+          ) : (
+            data.corso_da_chiamare.map((p, i) => (
+              <Pressable
+                key={p.id}
+                testID={`corso-card-${p.id}`}
+                onPress={() =>
+                  p.conversation_id
+                    ? router.push(`/conversation/${p.conversation_id}`)
+                    : router.push(`/cliente/${p.id}`)
+                }
+                style={({ pressed }) => [styles.card, pressed && { opacity: 0.9 }]}
+              >
+                <View style={[styles.rankWrap, { backgroundColor: colors.brandSecondary }]}>
+                  <Feather name="book-open" size={12} color={colors.onBrandPrimary} />
+                </View>
+                <Avatar uri={p.foto_profilo} name={`${p.nome} ${p.cognome}`} size={52} />
+                <View style={{ flex: 1 }}>
+                  <View style={styles.cardTopRow}>
+                    <Text style={styles.name} numberOfLines={1}>
+                      {p.nome} {p.cognome}
+                    </Text>
+                    <View style={styles.waitPill}>
+                      <Feather name="clock" size={11} color={colors.onBrandTertiary} />
+                      <Text style={styles.waitText}>{waitingSince(p.waiting_since)}</Text>
+                    </View>
+                  </View>
+                  <Text style={styles.service} numberOfLines={1}>
+                    {p.servizio || "Corso"} · {p.sede}
+                  </Text>
+                  <View style={styles.metaRow}>
+                    <TempBadge temp={p.temperature} small />
+                    <View style={styles.provRow}>
+                      <Feather name="instagram" size={11} color={colors.onSurfaceTertiary} />
+                      <Text style={styles.prov} numberOfLines={1}>
+                        {p.campagna || p.piattaforma}
+                      </Text>
+                    </View>
+                  </View>
+                </View>
+                <Feather name="phone" size={20} color={colors.brandSecondary} />
               </Pressable>
             ))
           )}

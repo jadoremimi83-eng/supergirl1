@@ -137,7 +137,7 @@ const styles = StyleSheet.create({
   webFrame: {
     flex: 1,
     width: "100%",
-    maxWidth: 480,
+    maxWidth: 1100,
     backgroundColor: colors.surface,
     borderLeftWidth: StyleSheet.hairlineWidth,
     borderRightWidth: StyleSheet.hairlineWidth,

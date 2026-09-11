@@ -747,8 +747,16 @@ async def home_priorities(user: dict = Depends(current_user)):
             "campagna": l.get("campagna"),
             "conversation_id": conv["id"] if conv else None,
         })
+    # Separazione contatti corso (servizio/campagna/annuncio/modulo contiene "corso")
+    def is_corso(l):
+        blob = " ".join(str(l.get(k) or "") for k in
+                        ("servizio", "campagna", "inserzione", "form_name")).lower()
+        return "corso" in blob
+    corso = [o for o, l in zip(out, leads) if is_corso(l)]
+    trattamenti = [o for o, l in zip(out, leads) if not is_corso(l)]
     total = await db.leads.count_documents({})
-    return {"da_fissare": out, "total_leads": total, "count": len(out)}
+    return {"da_fissare": trattamenti, "corso_da_chiamare": corso,
+            "total_leads": total, "count": len(out)}
 
 
 # ---------------------------------------------------------------------------
