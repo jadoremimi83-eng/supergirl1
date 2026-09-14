@@ -1,10 +1,11 @@
 import React, { useCallback, useRef, useState } from "react";
-import { View, Text, StyleSheet, Pressable, TextInput, Image, ActivityIndicator, Linking, Platform } from "react-native";
+import { View, Text, StyleSheet, Pressable, TextInput, Image, ActivityIndicator, Linking } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
+import * as DocumentPicker from "expo-document-picker";
 import * as Haptics from "expo-haptics";
 import { api, uploadMetaAsset } from "@/src/api";
 import { colors, spacing, radius, type } from "@/src/theme";
@@ -21,6 +22,7 @@ export default function CreaCampagna() {
   const [asset, setAsset] = useState<{ kind: string; image_hash?: string; video_id?: string; thumb_url?: string } | null>(null);
   const [uploading, setUploading] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<any>(null);
   const [previews, setPreviews] = useState<any[]>([]);
@@ -86,6 +88,39 @@ export default function CreaCampagna() {
     setUploading(false);
   };
 
+  const pickFromFiles = async () => {
+    setError(null);
+    const res = await DocumentPicker.getDocumentAsync({
+      type: ["image/*", "video/*"], copyToCacheDirectory: true, multiple: false,
+    });
+    if (res.canceled || !res.assets?.length) return;
+    const a = res.assets[0];
+    const isVideo = (a.mimeType || "").startsWith("video") || (a.name || "").toLowerCase().match(/\.(mp4|mov|m4v|avi)$/);
+    setUploading(true);
+    try {
+      const up = await uploadMetaAsset(a.uri, a.name || (isVideo ? "video.mp4" : "foto.jpg"), a.mimeType || (isVideo ? "video/mp4" : "image/jpeg"));
+      setAsset({ kind: up.type, image_hash: up.image_hash, video_id: up.video_id, thumb_url: up.thumb_url });
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch (e: any) { setError(e.message || "Upload non riuscito"); }
+    setUploading(false);
+  };
+
+  const toggleStatus = async (c: any) => {
+    const next = c.status === "ACTIVE" ? "PAUSED" : "ACTIVE";
+    setBusyId(c.campaign_id); setError(null);
+    try {
+      await api.patch(`/meta/campaigns/${c.campaign_id}/status`, { status: next });
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      await load();
+    } catch (e: any) { setError(e.message || "Impossibile cambiare stato"); }
+    setBusyId(null);
+  };
+  const delCampaign = async (c: any) => {
+    setBusyId(c.campaign_id);
+    try { await api.del(`/meta/campaigns/${c.campaign_id}`); await load(); } catch {}
+    setBusyId(null);
+  };
+
   const create = async () => {
     setError(null); setResult(null); setPreviews([]);
     if (!nome.trim()) { setError("Dai un nome alla campagna."); return; }
@@ -146,6 +181,10 @@ export default function CreaCampagna() {
               <Text style={styles.assetHint}>Carica una foto o un video{"\n"}Meta adatta i formati (Feed, Story, Reels) senza bande nere</Text>
             </View>
           )}
+        </Pressable>
+        <Pressable style={styles.fileBtn} onPress={pickFromFiles} testID="pick-file">
+          <Feather name="folder" size={14} color={colors.brandPrimary} />
+          <Text style={styles.fileBtnText}>Scegli file dal computer (foto o video)</Text>
         </Pressable>
 
         {/* 2. Nome + destinazione */}
@@ -214,7 +253,7 @@ export default function CreaCampagna() {
         </View>
 
         {/* 5. Messaggio */}
-        <Text style={styles.section}>5 · Testo dell'annuncio</Text>
+        <Text style={styles.section}>5 · Testo dell&apos;annuncio</Text>
         <TextInput value={messaggio} onChangeText={setMessaggio} multiline style={[styles.input, { minHeight: 70, textAlignVertical: "top" }]} testID="messaggio" />
 
         <View style={{ marginTop: spacing.lg }}>
@@ -246,15 +285,37 @@ export default function CreaCampagna() {
         {created.length > 0 && (
           <>
             <Text style={styles.section}>Campagne create</Text>
-            {created.map((c) => (
-              <View key={c.id} style={styles.createdItem}>
-                <Feather name="target" size={15} color={colors.brandPrimary} />
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.createdName}>{c.nome}</Text>
-                  <Text style={styles.createdMeta}>{c.destinazione === "whatsapp" ? "WhatsApp" : "Modulo"} · {c.status}</Text>
+            {created.map((c) => {
+              const active = c.status === "ACTIVE";
+              const busy = busyId === c.campaign_id;
+              return (
+                <View key={c.id} style={styles.createdItem}>
+                  <Feather name="target" size={15} color={colors.brandPrimary} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.createdName}>{c.nome}</Text>
+                    <Text style={styles.createdMeta}>
+                      {c.destinazione === "whatsapp" ? "WhatsApp" : "Modulo"} · {active ? "ATTIVA" : "IN PAUSA"}
+                    </Text>
+                  </View>
+                  {busy ? <ActivityIndicator color={colors.brandPrimary} /> : (
+                    <>
+                      <Pressable onPress={() => toggleStatus(c)} testID={`toggle-${c.campaign_id}`}
+                        style={[styles.stateBtn, active ? styles.statePause : styles.statePlay]}>
+                        <Feather name={active ? "pause" : "play"} size={13} color={active ? colors.onSurface : colors.onBrandPrimary} />
+                        <Text style={[styles.stateBtnText, { color: active ? colors.onSurface : colors.onBrandPrimary }]}>
+                          {active ? "Pausa" : "Attiva"}
+                        </Text>
+                      </Pressable>
+                      <Pressable onPress={() => delCampaign(c)} style={styles.delBtn} testID={`del-${c.campaign_id}`}>
+                        <Feather name="trash-2" size={14} color={colors.onSurfaceTertiary} />
+                      </Pressable>
+                    </>
+                  )}
                 </View>
-              </View>
-            ))}
+              );
+            })}
+            <Text style={styles.hintSmall}>In pausa non spende nulla. Attivando, Meta può iniziare a erogare dopo l&apos;approvazione.</Text>
+
           </>
         )}
       </KeyboardAwareScrollView>
@@ -284,6 +345,13 @@ const styles = StyleSheet.create({
   assetBox: { borderRadius: radius.md, borderWidth: 1.5, borderColor: colors.border, borderStyle: "dashed", backgroundColor: colors.surfaceSecondary, padding: spacing.xl, alignItems: "center", justifyContent: "center", minHeight: 130 },
   assetHint: { color: colors.onSurfaceTertiary, fontSize: 12.5, textAlign: "center", lineHeight: 18 },
   assetOk: { color: colors.onSurface, fontSize: 13, fontWeight: "600" },
+  fileBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, marginTop: spacing.sm, paddingVertical: 10, borderRadius: radius.sm, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surfaceSecondary },
+  fileBtnText: { color: colors.brandPrimary, fontSize: 13, fontWeight: "700" },
+  stateBtn: { flexDirection: "row", alignItems: "center", gap: 5, paddingHorizontal: spacing.md, paddingVertical: 8, borderRadius: radius.pill },
+  statePlay: { backgroundColor: colors.brandPrimary },
+  statePause: { backgroundColor: colors.surfaceTertiary, borderWidth: 1, borderColor: colors.border },
+  stateBtnText: { fontSize: 12.5, fontWeight: "800" },
+  delBtn: { width: 34, height: 34, borderRadius: radius.sm, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface },
   thumb: { width: 96, height: 96, borderRadius: radius.sm },
   rowChips: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
   chip: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: spacing.md, paddingVertical: 9, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surfaceSecondary },

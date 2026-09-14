@@ -213,3 +213,10 @@ admin@supergirl.app / Admin123! · operatore@supergirl.app / Operatore123!
 - Testato e2e via curl: upload immagine → creazione completa (campaign/adset/creative/ad PAUSED) → 4 anteprime → pulizia oggetti di test da Meta e DB. Screenshot desktop OK. Video: endpoint pronto (/advideos + attesa transcodifica), da validare con un video reale dopo deploy. Nessun testing_agent.
 - RIMANE: Modulo D avanzato (ritaglio locale con protezione volti/testi/logo — ora l'adattamento è affidato ad Advantage+ di Meta) e Fonte Lead nella scheda contatto.
 
+
+## Meta: Attiva/Pausa campagne + upload da tutte le sorgenti (2026-06)
+- CAUSA "connessione assente": mancava l'endpoint/pulsante di attivazione (esisteva solo la creazione in PAUSA). NON era un problema di deploy.
+- Backend: `PATCH /api/meta/campaigns/{campaign_id}/status` {ACTIVE|PAUSED} → aggiorna campagna + adset + ad su Meta (ACTIVE = davvero in erogazione). `DELETE /api/meta/campaigns/{campaign_id}` elimina da Meta + CRM. `GET /meta/campaigns/created` ora allinea lo status reale da Meta (effective_status). Verificato via curl: create → ACTIVE (effective ACTIVE) → PAUSED → delete. PAUSED = nessuna spesa.
+- Frontend `/altro/crea-campagna.tsx`: nella lista "Campagne create" ogni campagna ha badge ATTIVA/IN PAUSA + pulsante Attiva/Pausa + Elimina, con nota "In pausa non spende nulla". Funziona già prima del redeploy.
+- Upload da TUTTE le sorgenti: aggiunto expo-document-picker + pulsante "Scegli file dal computer (foto o video)" oltre alla galleria (accept image/* e video/*). Su desktop web apre il file dialog del sistema (qualsiasi cartella).
+

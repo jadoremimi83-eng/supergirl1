@@ -1771,7 +1771,64 @@ async def meta_create_campaign(body: MetaCampaignInput, user: dict = Depends(req
 
 @api.get("/meta/campaigns/created")
 async def meta_list_created(user: dict = Depends(require_admin)):
-    return await db.meta_campaigns.find({}, {"_id": 0}).sort("created_at", -1).to_list(100)
+    items = await db.meta_campaigns.find({}, {"_id": 0}).sort("created_at", -1).to_list(100)
+    # allinea lo stato reale da Meta (best-effort)
+    for it in items:
+        try:
+            st = await graph_get2(it["campaign_id"], {"fields": "effective_status,status"})
+            it["status"] = st.get("status", it.get("status"))
+            it["effective_status"] = st.get("effective_status")
+        except Exception:  # noqa
+            pass
+    return items
+
+
+class MetaStatusInput(BaseModel):
+    status: str  # ACTIVE | PAUSED
+
+
+@api.patch("/meta/campaigns/{campaign_id}/status")
+async def meta_toggle_status(campaign_id: str, body: MetaStatusInput,
+                             user: dict = Depends(require_admin)):
+    """Attiva o mette in pausa una campagna (campagna + gruppo inserzioni + annuncio).
+    PAUSED = nessuna spesa. ACTIVE = live (Meta può iniziare a spendere dopo l'approvazione)."""
+    if body.status not in ("ACTIVE", "PAUSED"):
+        raise HTTPException(400, "status non valido")
+    doc = await db.meta_campaigns.find_one({"campaign_id": campaign_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(404, "Campagna non trovata")
+    # aggiorna tutti i livelli in modo che ACTIVE significhi davvero in erogazione
+    await graph_post(f"/{campaign_id}", {"status": body.status})
+    for node in (doc.get("adset_id"), doc.get("ad_id")):
+        if node:
+            try:
+                await graph_post(f"/{node}", {"status": body.status})
+            except HTTPException as e:  # noqa
+                logger.warning(f"toggle {node} -> {body.status}: {e.detail}")
+    await db.meta_campaigns.update_one({"campaign_id": campaign_id},
+                                       {"$set": {"status": body.status}})
+    st = await graph_get2(campaign_id, {"fields": "effective_status,status"})
+    return {"campaign_id": campaign_id, "status": st.get("status"),
+            "effective_status": st.get("effective_status")}
+
+
+class MetaDeleteResult(BaseModel):
+    ok: bool
+
+
+@api.delete("/meta/campaigns/{campaign_id}")
+async def meta_delete_campaign(campaign_id: str, user: dict = Depends(require_admin)):
+    """Elimina definitivamente la campagna da Meta e dal CRM."""
+    doc = await db.meta_campaigns.find_one({"campaign_id": campaign_id}, {"_id": 0})
+    try:
+        async with httpx.AsyncClient(timeout=30) as c:
+            await c.delete(f"{GRAPH}/{campaign_id}", params=_meta_auth())
+    except Exception as e:  # noqa
+        logger.warning(f"delete campaign {campaign_id}: {e}")
+    await db.meta_campaigns.delete_one({"campaign_id": campaign_id})
+    if doc and doc.get("nome"):
+        await db.campaigns.delete_one({"nome": doc["nome"]})
+    return {"ok": True}
 
 
 PREVIEW_FORMATS = [
