@@ -7,7 +7,7 @@ import { Feather } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import * as DocumentPicker from "expo-document-picker";
 import * as Haptics from "expo-haptics";
-import { api, uploadMetaAsset } from "@/src/api";
+import { api, uploadMetaAsset, uploadWelcomePhoto } from "@/src/api";
 import { colors, spacing, radius, type } from "@/src/theme";
 import { SubHeader } from "@/src/components/SubHeader";
 import { GoldButton } from "@/src/components/ui";
@@ -39,6 +39,10 @@ export default function CreaCampagna() {
   const [waWelcome, setWaWelcome] = useState("Ciao! Come possiamo aiutarti?");
   const [q1, setQ1] = useState("Quanto costa il trattamento?");
   const [q2, setQ2] = useState("Posso fissare un appuntamento?");
+  const [welcomePhoto, setWelcomePhoto] = useState<string | null>(null);
+  const [forms, setForms] = useState<any[]>([]);
+  const [formId, setFormId] = useState<string | null>(null);
+  const [creatingForm, setCreatingForm] = useState(false);
 
   const [geoQuery, setGeoQuery] = useState("");
   const [geoResults, setGeoResults] = useState<Geo[]>([]);
@@ -47,11 +51,37 @@ export default function CreaCampagna() {
 
   const load = useCallback(async () => {
     try {
-      const [a, c] = await Promise.all([api.get("/meta/ad-account"), api.get("/meta/campaigns/created")]);
-      setAcct(a); setCreated(c);
+      const [a, c, f] = await Promise.all([
+        api.get("/meta/ad-account"), api.get("/meta/campaigns/created"), api.get("/meta/lead-forms"),
+      ]);
+      setAcct(a); setCreated(c); setForms(f);
+      if (f.length && !formId) setFormId(f[0].id);
     } catch {}
-  }, []);
+  }, [formId]);
   useFocusEffect(useCallback(() => { load(); }, [load]));
+
+  const createForm = async () => {
+    setCreatingForm(true); setError(null);
+    try {
+      const r = await api.post("/meta/lead-forms", { nome: "Raccolta Dati" });
+      const list = await api.get("/meta/lead-forms");
+      setForms(list); setFormId(r.id);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch (e: any) { setError(e.message || "Creazione modulo non riuscita"); }
+    setCreatingForm(false);
+  };
+
+  const pickWelcomePhoto = async () => {
+    setError(null);
+    const res = await DocumentPicker.getDocumentAsync({ type: ["image/*"], copyToCacheDirectory: true, multiple: false });
+    if (res.canceled || !res.assets?.length) return;
+    const a = res.assets[0];
+    try {
+      const up = await uploadWelcomePhoto(a.uri, a.name || "welcome.jpg", a.mimeType || "image/jpeg");
+      setWelcomePhoto(up.url);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch (e: any) { setError(e.message || "Upload foto non riuscito"); }
+  };
 
   const searchGeo = (q: string) => {
     setGeoQuery(q);
@@ -129,16 +159,19 @@ export default function CreaCampagna() {
     if (!nome.trim()) { setError("Dai un nome alla campagna."); return; }
     if (!asset) { setError("Carica prima una foto o un video."); return; }
     if (!plats.length) { setError("Scegli almeno una piattaforma (Facebook o Instagram)."); return; }
+    if (dest === "modulo" && !formId) { setError("Seleziona o crea un modulo raccolta dati."); return; }
     setCreating(true);
     try {
       const body: any = {
         nome, destinazione: dest, piattaforme: plats, genere,
+        lead_form_id: dest === "modulo" ? formId : undefined,
         eta_min: parseInt(etaMin) || 18, eta_max: parseInt(etaMax) || 65,
         budget_giornaliero_eur: parseFloat(budget) || 5,
         geo_keys: geoSel.map((g) => g.key), geo_countries: geoSel.length ? [] : ["IT"],
         testo_annuncio: messaggio,
         wa_welcome: waWelcome,
         wa_domande: [q1, q2].filter((x) => x.trim()),
+        welcome_image_url: welcomePhoto,
         image_hash: asset.image_hash, video_id: asset.video_id, thumb_url: asset.thumb_url,
       };
       const r = await api.post("/meta/campaigns/create", body);
@@ -202,6 +235,22 @@ export default function CreaCampagna() {
             <Chip key={d} active={dest === d} label={d === "whatsapp" ? "WhatsApp" : "Modulo"} icon={d === "whatsapp" ? "message-circle" : "file-text"} onPress={() => setDest(d)} testID={`dest-${d}`} />
           ))}
         </View>
+        {dest === "modulo" && (
+          <View style={styles.formBox}>
+            <Text style={styles.label}>Modulo raccolta dati (Nome, Cognome, Telefono — no email)</Text>
+            {forms.length > 0 ? (
+              <View style={styles.rowChips}>
+                {forms.map((f) => (
+                  <Chip key={f.id} active={formId === f.id} label={f.name.replace(/^SG-\s*/, "")} onPress={() => setFormId(f.id)} testID={`form-${f.id}`} />
+                ))}
+              </View>
+            ) : <Text style={styles.hintSmall}>Nessun modulo SG- ancora. Creane uno qui sotto.</Text>}
+            <Pressable style={styles.fileBtn} onPress={createForm} disabled={creatingForm} testID="create-form">
+              {creatingForm ? <ActivityIndicator color={colors.brandPrimary} /> : <Feather name="plus" size={14} color={colors.brandPrimary} />}
+              <Text style={styles.fileBtnText}>Crea nuovo modulo raccolta dati</Text>
+            </Pressable>
+          </View>
+        )}
 
         {/* 3. Piattaforme */}
         <Text style={styles.section}>3 · Piattaforme</Text>
@@ -270,6 +319,20 @@ export default function CreaCampagna() {
             <Text style={styles.hintSmall}>Il saluto che la cliente vede aprendo WhatsApp, con due domande rapide toccabili.</Text>
             <Text style={styles.label}>Messaggio di benvenuto</Text>
             <TextInput value={waWelcome} onChangeText={setWaWelcome} style={styles.input} testID="wa-welcome" />
+            <Text style={styles.label}>Foto da inviare col primo messaggio (opzionale)</Text>
+            <Pressable style={styles.assetBox} onPress={pickWelcomePhoto} testID="pick-welcome-photo">
+              {welcomePhoto ? (
+                <View style={{ alignItems: "center", gap: 6 }}>
+                  <Image source={{ uri: `${BASE}${welcomePhoto}` }} style={styles.thumb} />
+                  <Text style={styles.assetOk}>Foto pronta · tocca per cambiare</Text>
+                </View>
+              ) : (
+                <View style={{ alignItems: "center", gap: 8 }}>
+                  <Feather name="image" size={26} color={colors.onSurfaceTertiary} />
+                  <Text style={styles.assetHint}>Scegli una foto (es. del trattamento){"\n"}da qualsiasi cartella del dispositivo</Text>
+                </View>
+              )}
+            </Pressable>
             <Text style={styles.label}>Domanda rapida 1</Text>
             <TextInput value={q1} onChangeText={setQ1} style={styles.input} testID="wa-q1" maxLength={80} />
             <Text style={styles.label}>Domanda rapida 2</Text>
@@ -369,6 +432,7 @@ const styles = StyleSheet.create({
   assetOk: { color: colors.onSurface, fontSize: 13, fontWeight: "600" },
   fileBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, marginTop: spacing.sm, paddingVertical: 10, borderRadius: radius.sm, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surfaceSecondary },
   fileBtnText: { color: colors.brandPrimary, fontSize: 13, fontWeight: "700" },
+  formBox: { backgroundColor: colors.surfaceSecondary, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, padding: spacing.md, marginTop: spacing.sm },
   stateBtn: { flexDirection: "row", alignItems: "center", gap: 5, paddingHorizontal: spacing.md, paddingVertical: 8, borderRadius: radius.pill },
   statePlay: { backgroundColor: colors.brandPrimary },
   statePause: { backgroundColor: colors.surfaceTertiary, borderWidth: 1, borderColor: colors.border },

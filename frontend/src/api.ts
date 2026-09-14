@@ -60,6 +60,26 @@ export async function uploadImage(uri: string, name = "photo.jpg", type = "image
   return res.json();
 }
 
+// Upload generico (foto benvenuto WhatsApp) → { url }
+export async function uploadWelcomePhoto(uri: string, name: string, type: string) {
+  const { Platform } = require("react-native");
+  const token = await storage.secureGet<string>(TOKEN_KEY, "");
+  const form = new FormData();
+  if (Platform.OS === "web") {
+    const blob = await (await fetch(uri)).blob();
+    form.append("file", blob, name);
+  } else {
+    form.append("file", { uri, name, type } as any);
+  }
+  const res = await fetch(`${BASE}/api/meta/upload-welcome-photo`, {
+    method: "POST",
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: form,
+  });
+  if (!res.ok) throw new Error("Upload foto non riuscito");
+  return res.json();
+}
+
 // Upload asset Meta (foto O video) → ritorna { type, image_hash|video_id, thumb_url }
 export async function uploadMetaAsset(uri: string, name: string, type: string) {
   const { Platform } = require("react-native");

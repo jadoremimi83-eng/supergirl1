@@ -1600,6 +1600,51 @@ async def meta_geo_search(q: str, user: dict = Depends(require_admin)):
     return out
 
 
+class LeadFormInput(BaseModel):
+    nome: str = "Raccolta Dati"
+
+
+@api.get("/meta/lead-forms")
+async def meta_list_lead_forms(user: dict = Depends(require_admin)):
+    """Elenca i moduli raccolta dati SG- della Pagina."""
+    try:
+        pt = (await graph_get2(META_PAGE_ID, {"fields": "access_token"})).get("access_token") \
+            or META_PAGE_ACCESS_TOKEN
+        async with httpx.AsyncClient(timeout=25) as c:
+            r = await c.get(f"{GRAPH}/{META_PAGE_ID}/leadgen_forms",
+                            params={"fields": "id,name,status", "limit": 200, "access_token": pt})
+        forms = r.json().get("data", []) if not r.is_error else []
+    except Exception as e:  # noqa
+        raise HTTPException(502, detail=str(e)[:200])
+    return [{"id": f["id"], "name": f.get("name"), "status": f.get("status")}
+            for f in forms if sg_prefixed(f.get("name"))]
+
+
+@api.post("/meta/lead-forms")
+async def meta_create_lead_form(body: LeadFormInput, user: dict = Depends(require_admin)):
+    """Crea un modulo raccolta dati (Nome+Cognome+Telefono, SENZA email), prefisso SG-, ACTIVE."""
+    name = _sg_name(body.nome)
+    site = "http://jadoremimi.produco.net/about"
+    try:
+        pg = await graph_get(META_PAGE_ID, "website,link")
+        site = pg.get("website") or pg.get("link") or site
+    except Exception:  # noqa
+        pass
+    res = await graph_post(f"/{META_PAGE_ID}/leadgen_forms", {
+        "name": name, "locale": "it_IT",
+        "questions": json.dumps([{"type": "FULL_NAME"}, {"type": "PHONE"}]),
+        "privacy_policy": json.dumps({"url": site, "link_text": "Informativa privacy"}),
+        "follow_up_action_url": site,
+        "follow_up_action_text": "Grazie! Ti contatteremo a breve."})
+    fid = res.get("id")
+    if not fid:
+        raise HTTPException(502, detail={"meta_error": res})
+    # registra nel CRM per il riconoscimento provenienza
+    await db.meta_forms.update_one({"form_id": fid},
+        {"$set": {"form_id": fid, "name": name, "status": "ACTIVE", "enabled": True}}, upsert=True)
+    return {"id": fid, "name": name, "status": "ACTIVE"}
+
+
 class MetaCampaignInput(BaseModel):
     nome: str
     destinazione: str = "whatsapp"           # whatsapp | modulo
@@ -1620,6 +1665,7 @@ class MetaCampaignInput(BaseModel):
     image_hash: Optional[str] = None
     video_id: Optional[str] = None
     thumb_url: Optional[str] = None
+    welcome_image_url: Optional[str] = None
     link: str = "https://wa.me/"
 
 
@@ -1668,6 +1714,39 @@ async def meta_upload_asset(file: UploadFile = File(...), user: dict = Depends(r
         if not image_hash:
             raise HTTPException(502, detail={"meta_error": res})
         return {"type": "image", "image_hash": image_hash, "thumb_url": thumb_url}
+
+
+@api.post("/meta/upload-welcome-photo")
+async def meta_upload_welcome_photo(file: UploadFile = File(...),
+                                    user: dict = Depends(require_admin)):
+    """Carica la foto del messaggio WhatsApp iniziale (object storage, modificabile)."""
+    content = await file.read()
+    ctype = (file.content_type or "image/jpeg").lower()
+    fname = file.filename or "welcome.jpg"
+    ext = fname.rsplit(".", 1)[-1].lower() if "." in fname else "jpg"
+    spath = f"supergirl/meta/welcome/{user['id']}/{uuid.uuid4()}.{ext}"
+    await run_in_threadpool(_put_object, spath, content, ctype)
+    return {"url": f"/api/files/{spath}"}
+
+
+class WelcomeUpdate(BaseModel):
+    welcome_image_url: Optional[str] = None
+    wa_welcome: Optional[str] = None
+    wa_domande: Optional[List[str]] = None
+
+
+@api.patch("/meta/campaigns/{campaign_id}/welcome")
+async def meta_update_welcome(campaign_id: str, body: WelcomeUpdate,
+                              user: dict = Depends(require_admin)):
+    """Aggiorna in qualsiasi momento foto/testo/domande del messaggio WhatsApp iniziale."""
+    doc = await db.meta_campaigns.find_one({"campaign_id": campaign_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(404, "Campagna non trovata")
+    upd = {k: v for k, v in body.dict().items() if v is not None}
+    if upd:
+        await db.meta_campaigns.update_one({"campaign_id": campaign_id}, {"$set": upd})
+    return await db.meta_campaigns.find_one({"campaign_id": campaign_id}, {"_id": 0})
+
 
 
 async def _wait_video_ready(video_id: str, tries: int = 20):
@@ -1783,7 +1862,9 @@ async def meta_create_campaign(body: MetaCampaignInput, user: dict = Depends(req
     doc = {"id": str(uuid.uuid4()), "campaign_id": campaign_id, "adset_id": adset_id,
            "creative_id": creative_id, "ad_id": ad["id"], "nome": name,
            "destinazione": body.destinazione, "status": "PAUSED",
-           "thumb_url": body.thumb_url, "created_at": iso(now_utc())}
+           "thumb_url": body.thumb_url, "welcome_image_url": body.welcome_image_url,
+           "wa_welcome": body.wa_welcome, "wa_domande": body.wa_domande,
+           "created_at": iso(now_utc())}
     await db.meta_campaigns.insert_one(doc)
     await ensure_campaign(name, None, None)
     return {k: v for k, v in doc.items() if k != "_id"}
@@ -2657,6 +2738,24 @@ async def whatsapp_send_text(to: str, body: str):
     return r.json() if not r.is_error else {"error": r.text}
 
 
+async def whatsapp_send_image(to: str, image_link: str, caption: str = ""):
+    cfg = await get_wa_config()
+    if not wa_is_configured(cfg) or not to or not image_link:
+        return {"skipped": True}
+    if image_link.startswith("/"):
+        base = (os.environ.get("PUBLIC_BASE_URL") or os.environ.get("EXPO_PUBLIC_BACKEND_URL") or "").rstrip("/")
+        image_link = f"{base}{image_link}" if base else image_link
+    url = f"https://graph.facebook.com/{META_API_VERSION}/{cfg['phone_number_id']}/messages"
+    payload = {"messaging_product": "whatsapp", "recipient_type": "individual",
+               "to": to, "type": "image",
+               "image": {"link": image_link, **({"caption": caption[:1024]} if caption else {})}}
+    async with httpx.AsyncClient(timeout=25) as c:
+        r = await c.post(url, headers={"Authorization": f"Bearer {cfg['token']}"}, json=payload)
+    if r.is_error:
+        logger.error(f"WA image error: {r.text}")
+    return r.json() if not r.is_error else {"error": r.text}
+
+
 async def whatsapp_send_buttons(to: str, body: str, buttons: list):
     """Invia un messaggio interattivo con quick-reply buttons (max 3, titoli <=20 char)."""
     cfg = await get_wa_config()
@@ -3068,9 +3167,18 @@ async def handle_inbound_wa(m: dict, value: dict):
             await db.conversations.update_one({"id": conv["id"]}, {"$set": {
                 "last_message": tr_reply, "last_message_at": iso(now_utc())}})
             if need_btn:
-                await whatsapp_send_buttons(wa_from, tr_reply, [
-                    {"id": "tratt_prezzo", "title": "Quanto costa?"},
-                    {"id": "tratt_appuntamento", "title": "Fissare appuntamento"}])
+                camp = await db.meta_campaigns.find_one(
+                    {"nome": lead.get("campagna")}, {"_id": 0}) if lead.get("campagna") else None
+                welcome_img = (camp or {}).get("welcome_image_url")
+                if welcome_img:
+                    await whatsapp_send_image(wa_from, welcome_img, tr_reply)
+                    await whatsapp_send_buttons(wa_from, "Scegli pure una domanda 👇", [
+                        {"id": "tratt_prezzo", "title": "Quanto costa?"},
+                        {"id": "tratt_appuntamento", "title": "Fissare appuntamento"}])
+                else:
+                    await whatsapp_send_buttons(wa_from, tr_reply, [
+                        {"id": "tratt_prezzo", "title": "Quanto costa?"},
+                        {"id": "tratt_appuntamento", "title": "Fissare appuntamento"}])
             else:
                 await whatsapp_send_text(wa_from, tr_reply)
             return
