@@ -140,6 +140,16 @@ export default function Cliente() {
           </Text>
         </View>
 
+        {/* Orario preferito di richiamo (flusso trattamenti) */}
+        {!!lead.orario_preferito_richiamo && (
+          <View style={styles.orarioBox}>
+            <Feather name="clock" size={15} color={colors.brandPrimary} />
+            <Text style={styles.orarioText}>
+              Preferisce essere richiamata: <Text style={{ fontWeight: "800", color: colors.onSurface }}>{lead.orario_preferito_richiamo}</Text>
+            </Text>
+          </View>
+        )}
+
         {/* Azioni */}
         <View style={styles.actions}>
           <View style={{ flex: 1 }}>
@@ -312,6 +322,8 @@ const styles = StyleSheet.create({
   tipoChipTxt: { color: colors.onSurfaceSecondary, fontSize: 13.5, fontWeight: "700" },
   tipoChipTxtOn: { color: colors.onBrandPrimary },
   tipoHint: { color: colors.onSurfaceTertiary, fontSize: 12, lineHeight: 17, marginTop: spacing.sm },
+  orarioBox: { flexDirection: "row", alignItems: "center", gap: spacing.sm, backgroundColor: colors.brandTertiary, borderRadius: radius.md, borderWidth: 1, borderColor: colors.brandPrimary, padding: spacing.md, marginBottom: spacing.lg },
+  orarioText: { flex: 1, color: colors.onBrandTertiary, fontSize: 13.5, lineHeight: 19 },
   section: {
     backgroundColor: colors.surfaceSecondary,
     borderRadius: radius.md,

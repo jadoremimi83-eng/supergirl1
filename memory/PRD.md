@@ -190,3 +190,14 @@ admin@supergirl.app / Admin123! · operatore@supergirl.app / Operatore123!
 - Testato via curl: qualifica → proposta (martedì 15:00) → conferma → booked (chiamata_corso_fissata + call_slot creato); overlap→15:30; Dom→Mar 09:00; Ven 19:00→Sab 09:00. Screenshot desktop schermata Chiamate Corsi OK. Nessun deploy/testing_agent (crediti). Serve redeploy per la produzione.
 - PROSSIMO: Fonte Lead nella scheda contatto (provenienza/campagna/sede/WA-Modulo + filtri/ordinamento), poi Modulo C+D (creazione campagne Meta SG- + adattamento immagini con protezione volti/testi/logo).
 
+
+## Trattamenti WhatsApp — flusso deterministico + risposte da SCHEDA (2026-06)
+- **Domande preimpostate**: ai lead trattamento su WhatsApp Andrea invia all'apertura 2 quick-reply buttons ("Quanto costa?" / "Fissare appuntamento"); nel simulatore compaiono come elenco testuale. `whatsapp_send_buttons` (interactive). Estrazione della button_reply in handle_inbound_wa.
+- **Riconoscimento trattamento dalla campagna** (`match_treatment`): tabella prezzi ufficiale hardcoded → Model Leg 180/90, Bomba 300/150, Colombiano 160/80, Bambolina 300/150.
+- **Prezzo** → SEMPRE frase promo approvata (`promo_phrase`): "Il trattamento {X} costa €{pieno}, ma è in promozione a metà prezzo, ovvero €{promo}, fino al {data} e fino a esaurimento posti disponibili. Ti richiamo a breve per comunicarti le disponibilità rimaste." Scadenza = data primo contatto (data_acquisizione) + 10 giorni (formato gg/mm/aaaa, Europe/Rome). Poi → **Contatti da richiamare** (attesa_chiamata).
+- **Prenotazione** o **temi medici** (gravidanza, patologie, controindicazioni, farmaci, allergie, anestesia…) → frase unica "Su questo preferisco darti un'informazione precisa. Ti richiamo a breve e ti spieghiamo tutto." → da richiamare.
+- **Non può parlare ora** → Andrea chiede l'orario, lo salva in `lead.orario_preferito_richiamo` (visibile nella Scheda Cliente e come tag nella lista Priorità), contatto resta in da richiamare.
+- **Altre domande sul trattamento** → `ai_answer_from_scheda`: Andrea risponde USANDO SOLO la scheda del servizio (descrizione, info, faq) + info generali KB. Se l'informazione NON c'è → token [[RICHIAMO]] → frase "informazione precisa" → da richiamare. Tema medico → [[RICHIAMO_MEDICO]] → da richiamare. Mai inventare. NON parla di prezzi (li gestisce il flusso dedicato).
+- Le schede Trattamenti si compilano già in-app (foto/descrizione/info/faq/prezzo/promozione) e Andrea le usa in automatico.
+- Testato via curl: menu → prezzo (Bomba 300→150, scadenza +10gg) → booking/medico/can't-talk (orario salvato) → domande coperte dalla scheda (durata/invasivo: risposta corretta) → domanda non coperta (macchinario: → richiamata). Nessun deploy/testing_agent (crediti). Serve redeploy per la produzione.
+

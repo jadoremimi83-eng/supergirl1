@@ -31,6 +31,7 @@ type Priority = {
   ig_username?: string | null;
   piattaforma?: string | null;
   campagna?: string | null;
+  orario_preferito_richiamo?: string | null;
   conversation_id?: string | null;
 };
 
@@ -149,6 +150,12 @@ export default function Priorities() {
                   <Text style={styles.service} numberOfLines={1}>
                     {p.servizio} · {p.sede}
                   </Text>
+                  {!!p.orario_preferito_richiamo && (
+                    <View style={styles.orarioTag}>
+                      <Feather name="clock" size={11} color={colors.brandPrimary} />
+                      <Text style={styles.orarioTagTxt} numberOfLines={1}>Richiamare {p.orario_preferito_richiamo}</Text>
+                    </View>
+                  )}
                   <View style={styles.metaRow}>
                     <TempBadge temp={p.temperature} small />
                     <View style={styles.provRow}>
@@ -316,6 +323,8 @@ const styles = StyleSheet.create({
   },
   waitText: { color: colors.onBrandTertiary, fontSize: 11, fontWeight: "700" },
   service: { color: colors.onSurfaceSecondary, fontSize: 13, marginTop: 2 },
+  orarioTag: { flexDirection: "row", alignItems: "center", gap: 5, alignSelf: "flex-start", marginTop: 5, backgroundColor: colors.brandTertiary, borderRadius: radius.sm, paddingHorizontal: 8, paddingVertical: 3 },
+  orarioTagTxt: { color: colors.brandPrimary, fontSize: 11, fontWeight: "800" },
   metaRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm, marginTop: spacing.sm },
   provRow: { flexDirection: "row", alignItems: "center", gap: 4, flex: 1 },
   prov: { color: colors.onSurfaceTertiary, fontSize: 11, flex: 1 },

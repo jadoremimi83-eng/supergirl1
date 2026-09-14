@@ -143,6 +143,28 @@ CONFIRM_WORDS = [
     "andata", "va bene così", "mi va bene", "🆗", "👍",
 ]
 
+# --- Flusso TRATTAMENTI su WhatsApp (script approvato) ---
+# Prezzi ufficiali: nome trattamento -> (label, prezzo pieno €, promo metà €)
+TREATMENT_PRICES = {
+    "model leg": ("Model Leg", 180, 90),
+    "bomba": ("Bomba", 300, 150),
+    "colombiano": ("Colombiano", 160, 80),
+    "bambolina": ("Bambolina", 300, 150),
+}
+PRICE_WORDS = ["quanto costa", "prezzo", "costo", "quanto viene", "quanto mi viene",
+               "quanto è", "tariffa", "quanto costerebbe", "costi"]
+BOOKING_WORDS = ["fissare", "appuntamento", "prenotare", "prenotazione", "fissiamo",
+                 "posso venire", "quando posso", "prenoto", "vorrei venire", "fisso"]
+# Temi medici/delicati: SEMPRE passaggio alla chiamata (mai risposte mediche)
+MEDICAL_WORDS = ["gravidanza", "incinta", "allattamento", "patologia", "malattia",
+                 "controindicazioni", "controindicazione", "farmaci", "farmaco", "diabete",
+                 "allergia", "allergica", "anestesia", "cicatrici", "cicatrice"]
+CANT_TALK_WORDS = ["non posso parlare", "non posso ora", "sono al lavoro", "richiamami",
+                   "richiamatemi", "più tardi", "sono occupata", "adesso no", "ora no",
+                   "non ho tempo", "in un altro momento", "chiamami"]
+INFO_PRECISA = ("Su questo preferisco darti un'informazione precisa. "
+                "Ti richiamo a breve e ti spieghiamo tutto.")
+
 
 # ---------------------------------------------------------------------------
 # Auth models & helpers
@@ -577,14 +599,6 @@ async def simulate_ai_turn(conv_id: str, user: dict = Depends(current_user)):
 
     is_corso = (lead.get("tipo") or "trattamento") == "corso"
 
-    # Rileva handoff (per i CORSI la prenotazione è gestita dal flusso Academy)
-    if last_customer and not is_corso:
-        motivo, ai_message = detect_handoff(last_customer["text"])
-        if motivo:
-            reply, summary, new_status = await do_handoff(lead, conv, motivo, ai_message)
-            return {"message": reply, "handoff": True, "motivo": motivo,
-                    "summary": summary, "new_status": new_status}
-
     # CORSO: gestione prenotazione chiamata (proposta / conferma slot)
     if is_corso and last_customer:
         handled, corso_reply, booked = await handle_corso_turn(conv, lead, last_customer["text"])
@@ -603,7 +617,23 @@ async def simulate_ai_turn(conv_id: str, user: dict = Depends(current_user)):
                     "handoff": booked, "motivo": "chiamata_corso" if booked else None,
                     "new_status": "chiamata_corso_fissata" if booked else "in_attesa"}
 
-    # Altrimenti: l'AI commerciale reale genera la prossima risposta
+    # TRATTAMENTO: flusso deterministico approvato (prezzo / prenotazione / richiamo)
+    if (not is_corso) and last_customer:
+        handled, tr_reply, keep_on, _btn = await handle_trattamento_turn(
+            conv, lead, last_customer["text"])
+        if handled:
+            tmsg = {"id": str(uuid.uuid4()), "conversation_id": conv_id, "sender": "ai",
+                    "text": tr_reply, "type": "text", "created_at": iso(now_utc()),
+                    "read": True}
+            await db.messages.insert_one(tmsg)
+            await db.conversations.update_one({"id": conv_id}, {"$set": {
+                "last_message": tr_reply, "last_message_at": iso(now_utc())}})
+            fresh = await db.leads.find_one({"id": lead["id"]}, {"_id": 0})
+            return {"message": {k: v for k, v in tmsg.items() if k != "_id"},
+                    "handoff": (not keep_on),
+                    "new_status": fresh.get("stato_pipeline")}
+
+    # Altrimenti (CORSO senza preferenza): l'AI Academy genera la prossima risposta
     reply_text = await ai_generate_reply(conv, lead)
     # L'AI non inventa: se ha emesso un token di richiamo → handoff con frase naturale
     fb_motivo, fb_phrase = detect_ai_fallback(reply_text)
@@ -798,6 +828,7 @@ async def home_priorities(user: dict = Depends(current_user)):
             "ig_username": l.get("ig_username"),
             "piattaforma": l.get("piattaforma"),
             "campagna": l.get("campagna"),
+            "orario_preferito_richiamo": l.get("orario_preferito_richiamo"),
             "conversation_id": conv["id"] if conv else None,
         })
     # Separazione contatti CORSO in base al tipo esplicito del lead (corso|trattamento)
@@ -1898,6 +1929,160 @@ async def handle_corso_turn(conv: dict, lead: dict, text: str):
     return False, None, False
 
 
+# ---------------------------------------------------------------------------
+# MODULO B — Flusso TRATTAMENTI su WhatsApp (script approvato, deterministico)
+# ---------------------------------------------------------------------------
+def match_treatment(lead: dict):
+    """Riconosce il trattamento dalla campagna/servizio/inserzione. Ritorna
+    (label, prezzo, promo) oppure None."""
+    blob = " ".join(str(lead.get(k) or "") for k in
+                    ("servizio", "campagna", "inserzione", "form_name")).lower()
+    for key, val in TREATMENT_PRICES.items():
+        if key in blob:
+            return val
+    return None
+
+
+def promo_phrase(lead: dict, label: str, prezzo: int, promo: int) -> str:
+    """Frase promo approvata, con scadenza = data primo contatto + 10 giorni."""
+    try:
+        base = datetime.fromisoformat(lead.get("data_acquisizione"))
+    except Exception:
+        base = now_utc()
+    deadline = (base + timedelta(days=10)).astimezone(ROME_TZ).strftime("%d/%m/%Y")
+    return (f"Il trattamento {label} costa €{prezzo}, ma è in promozione a metà prezzo, "
+            f"ovvero €{promo}, fino al {deadline} e fino a esaurimento posti disponibili. "
+            f"Ti richiamo a breve per comunicarti le disponibilità rimaste.")
+
+
+async def _tratt_to_richiamare(lead: dict, conv: dict, notify_body: str):
+    """Sposta il contatto in 'Contatti da richiamare' (attesa_chiamata) e spegne l'AI."""
+    from_status = lead["stato_pipeline"]
+    await cancel_followups(lead["id"])
+    await db.leads.update_one({"id": lead["id"]}, {"$set": {
+        "stato_pipeline": "attesa_chiamata", "temperature": "molto_calda",
+        "handoff_at": iso(now_utc()), "ultimo_contatto": iso(now_utc())}})
+    await db.conversations.update_one({"id": conv["id"]}, {"$set": {
+        "ai_attiva": False, "stato": "attesa_chiamata"}})
+    if from_status != "attesa_chiamata":
+        await record_status_change(lead, from_status, "attesa_chiamata", "ai")
+    await create_notification("ai_intervento", lead, notify_body)
+    nome = f"{lead['nome']} {lead.get('cognome','')}".strip()
+    extra = f" · {lead['servizio']}" if lead.get("servizio") else ""
+    await notify_staff_push("Contatto da richiamare", f"{nome}{extra}",
+                            f"/conversation/{conv['id']}")
+
+
+async def ai_answer_from_scheda(conv: dict, lead: dict) -> str:
+    """Risposta di Andrea basata ESCLUSIVAMENTE sulla scheda del trattamento
+    (descrizione, info, faq) + info generali della Knowledge Base. Se l'informazione
+    non c'è emette [[RICHIAMO]]; per temi medici [[RICHIAMO_MEDICO]]."""
+    svc = await db.services.find_one({"nome": lead.get("servizio")}, {"_id": 0}) if lead.get("servizio") else None
+    kb = await db.knowledge_base.find_one({}, {"_id": 0}) or {}
+    msgs = await db.messages.find(
+        {"conversation_id": conv["id"]}, {"_id": 0}).sort("created_at", 1).to_list(500)
+    recent = msgs[-12:]
+    transcript = "\n".join(
+        f"{'Cliente' if m['sender'] == 'cliente' else ASSISTANT_NAME}: {m['text']}"
+        for m in recent)
+    if svc:
+        scheda = (f"TRATTAMENTO: {svc.get('nome','')}\n"
+                  f"Descrizione: {svc.get('descrizione','')}\n"
+                  f"Info: {svc.get('info','')}\n"
+                  f"FAQ: {svc.get('faq','')}")
+    else:
+        scheda = "Nessuna scheda disponibile per questo trattamento."
+    system = (
+        f"Sei {ASSISTANT_NAME} di {BRAND_NAME}, assistente su WhatsApp. Rispondi in italiano, "
+        f"tono caldo e naturale, messaggio BREVE (stile WhatsApp), una sola risposta, niente cuori.\n"
+        f"REGOLA ANTI-INVENZIONE (FONDAMENTALE): rispondi USANDO SOLO le informazioni nella SCHEDA "
+        f"TRATTAMENTO e nelle INFO GENERALI qui sotto. Se la risposta NON è presente in queste "
+        f"informazioni, NON inventare e NON tirare a indovinare: rispondi ESATTAMENTE e SOLO con il "
+        f"token [[RICHIAMO]] (senza altro testo).\n"
+        f"REGOLA TEMI MEDICI: per controindicazioni, gravidanza/allattamento, patologie, farmaci o "
+        f"qualsiasi tema medico, rispondi ESATTAMENTE e SOLO con [[RICHIAMO_MEDICO]].\n"
+        f"NON parlare di prezzi (li gestisce un altro flusso): se chiedono il prezzo usa [[RICHIAMO]].\n\n"
+        f"SCHEDA TRATTAMENTO:\n{scheda}\n\n"
+        f"INFO GENERALI:\nAzienda: {kb.get('azienda','')}\nSedi: {kb.get('sedi','')}\n"
+        f"Orari: {kb.get('orari','')}\nFAQ generali: {kb.get('faq','')}\n")
+    try:
+        chat = LlmChat(api_key=EMERGENT_LLM_KEY, session_id=conv["id"],
+                       system_message=system).with_model(AI_PROVIDER, AI_MODEL)
+        prompt = (f"Conversazione WhatsApp finora:\n{transcript}\n\n"
+                  f"Scrivi SOLO il prossimo messaggio di {ASSISTANT_NAME} alla cliente.")
+        reply = await chat.send_message(UserMessage(text=prompt))
+        return strip_hearts((reply or "").strip())
+    except Exception as e:  # noqa
+        logger.warning(f"ai_answer_from_scheda failed: {e}")
+        return "[[RICHIAMO]]"
+
+
+async def handle_trattamento_turn(conv: dict, lead: dict, text: str):
+    """Gestisce un turno per un lead TRATTAMENTO.
+    - prezzo → frase promo approvata → richiamata
+    - prenotazione → 'informazione precisa' → richiamata
+    - temi medici → 'informazione precisa' → richiamata
+    - non può parlare → chiede orario preferito e lo salva
+    - primo contatto → mostra le 2 domande preimpostate
+    - altre domande sul trattamento → risposta basata sulla SCHEDA (mai inventare;
+      se l'info non c'è → richiamata)
+    Ritorna (handled, reply, keep_ai_on, needs_buttons). handled è sempre True."""
+    low = (text or "").lower()
+
+    # 0) stavamo aspettando l'orario preferito di richiamo
+    if conv.get("awaiting_richiamo_time"):
+        orario = (text or "").strip()
+        await db.leads.update_one({"id": lead["id"]}, {"$set": {
+            "orario_preferito_richiamo": orario}})
+        await db.conversations.update_one({"id": conv["id"]}, {"$set": {
+            "awaiting_richiamo_time": False}})
+        await _tratt_to_richiamare(lead, conv, f"Da richiamare — orario preferito: {orario}")
+        return True, f"Perfetto, allora ti richiamo io {orario}. A prestissimo!", False, False
+
+    # 1) prezzo → frase promo approvata
+    if any(w in low for w in PRICE_WORDS):
+        t = match_treatment(lead)
+        reply = promo_phrase(lead, *t) if t else INFO_PRECISA
+        await _tratt_to_richiamare(lead, conv, "Ha chiesto il prezzo: da richiamare")
+        return True, reply, False, False
+
+    # 2) vuole prenotare → frase "informazione precisa"
+    if any(w in low for w in BOOKING_WORDS):
+        await _tratt_to_richiamare(lead, conv, "Vuole fissare un appuntamento: da richiamare")
+        return True, INFO_PRECISA, False, False
+
+    # 3) temi medici/delicati → sempre alla chiamata
+    if any(w in low for w in MEDICAL_WORDS):
+        await _tratt_to_richiamare(lead, conv, "Domanda su tema medico: da richiamare")
+        return True, INFO_PRECISA, False, False
+
+    # 4) non può parlare ora → chiedi orario preferito
+    if any(w in low for w in CANT_TALK_WORDS):
+        await db.conversations.update_one({"id": conv["id"]}, {"$set": {
+            "awaiting_richiamo_time": True}})
+        await db.leads.update_one({"id": lead["id"]}, {"$set": {
+            "stato_pipeline": "attesa_chiamata", "ultimo_contatto": iso(now_utc())}})
+        return True, "Certo, nessun problema! A che ora preferisci che ti richiami?", True, False
+
+    # 5) primo contatto → presenta le due domande preimpostate
+    if not conv.get("tratt_menu_shown"):
+        await db.conversations.update_one({"id": conv["id"]}, {"$set": {"tratt_menu_shown": True}})
+        reply = (f"Ciao {lead.get('nome','')}! Sono {ASSISTANT_NAME} di {BRAND_NAME}. "
+                 f"Come posso aiutarti? Puoi chiedermi:\n"
+                 f"• Quanto costa il trattamento?\n• Posso fissare un appuntamento?")
+        return True, reply, True, True
+
+    # 6) altra domanda sul trattamento → risposta basata SOLO sulla scheda
+    reply = await ai_answer_from_scheda(conv, lead)
+    fb_motivo, _ = detect_ai_fallback(reply)
+    if fb_motivo:
+        await _tratt_to_richiamare(lead, conv, "Info non presente nella scheda: da richiamare")
+        return True, INFO_PRECISA, False, False
+    await db.leads.update_one({"id": lead["id"]}, {"$set": {
+        "stato_pipeline": "ai_conversazione", "ultimo_contatto": iso(now_utc())}})
+    return True, reply, True, False
+
+
 # --- Reminder chiamate corso: avviso + push 1 ora prima ---
 async def call_reminder_worker():
     while True:
@@ -2093,6 +2278,30 @@ async def whatsapp_send_text(to: str, body: str):
         r = await c.post(url, headers={"Authorization": f"Bearer {cfg['token']}"}, json=payload)
     if r.is_error:
         logger.error(f"WA text error: {r.text}")
+    return r.json() if not r.is_error else {"error": r.text}
+
+
+async def whatsapp_send_buttons(to: str, body: str, buttons: list):
+    """Invia un messaggio interattivo con quick-reply buttons (max 3, titoli <=20 char)."""
+    cfg = await get_wa_config()
+    if not wa_is_configured(cfg) or not to:
+        return {"skipped": True}
+    url = f"https://graph.facebook.com/{META_API_VERSION}/{cfg['phone_number_id']}/messages"
+    payload = {
+        "messaging_product": "whatsapp", "recipient_type": "individual", "to": to,
+        "type": "interactive",
+        "interactive": {
+            "type": "button",
+            "body": {"text": body[:1024]},
+            "action": {"buttons": [
+                {"type": "reply", "reply": {"id": b["id"], "title": b["title"][:20]}}
+                for b in buttons[:3]]},
+        },
+    }
+    async with httpx.AsyncClient(timeout=20) as c:
+        r = await c.post(url, headers={"Authorization": f"Bearer {cfg['token']}"}, json=payload)
+    if r.is_error:
+        logger.error(f"WA buttons error: {r.text}")
     return r.json() if not r.is_error else {"error": r.text}
 
 
@@ -2413,6 +2622,10 @@ def typing_seconds(text: str) -> float:
 async def handle_inbound_wa(m: dict, value: dict):
     wa_from = m.get("from")
     text = (m.get("text") or {}).get("body", "")
+    if not text and m.get("interactive"):
+        inter = m["interactive"]
+        br = inter.get("button_reply") or inter.get("list_reply") or {}
+        text = br.get("title", "")
     if not wa_from:
         return
     lead = await db.leads.find_one(
@@ -2467,36 +2680,49 @@ async def handle_inbound_wa(m: dict, value: dict):
             await whatsapp_send_text(wa_from, corso_reply)
             return
         # nessuna preferenza rilevata → prosegue con la risposta AI Academy sotto
-    motivo, ai_msg = detect_handoff(text) if not is_corso else (None, None)
-    if motivo:
-        # attesa proporzionale alla lunghezza del messaggio di handoff
-        await asyncio.sleep(typing_seconds(ai_msg))
-        await do_handoff(lead, conv, motivo, ai_msg)
-        await whatsapp_send_text(wa_from, ai_msg)
-    else:
-        reply = await ai_generate_reply(conv, lead)
-        # L'AI non inventa: token di richiamo → passa allo staff con frase naturale
-        fb_motivo, fb_phrase = detect_ai_fallback(reply)
-        if fb_motivo:
-            await asyncio.sleep(typing_seconds(fb_phrase))
-            await do_handoff(lead, conv, fb_motivo, fb_phrase)
-            await whatsapp_send_text(wa_from, fb_phrase)
+
+    # TRATTAMENTO: flusso deterministico approvato (prezzo / prenotazione / richiamo)
+    if not is_corso:
+        handled, tr_reply, keep_on, need_btn = await handle_trattamento_turn(conv, lead, text)
+        if handled:
+            await asyncio.sleep(typing_seconds(tr_reply))
+            await db.messages.insert_one({
+                "id": str(uuid.uuid4()), "conversation_id": conv["id"], "sender": "ai",
+                "text": tr_reply, "type": "text", "created_at": iso(now_utc()), "read": True})
+            await db.conversations.update_one({"id": conv["id"]}, {"$set": {
+                "last_message": tr_reply, "last_message_at": iso(now_utc())}})
+            if need_btn:
+                await whatsapp_send_buttons(wa_from, tr_reply, [
+                    {"id": "tratt_prezzo", "title": "Quanto costa?"},
+                    {"id": "tratt_appuntamento", "title": "Fissare appuntamento"}])
+            else:
+                await whatsapp_send_text(wa_from, tr_reply)
             return
-        # il "sta scrivendo…" resta attivo per un tempo proporzionale alla
-        # risposta, scontando il tempo già speso a generarla
-        elapsed = loop.time() - t0
-        delay = max(0.0, typing_seconds(reply) - elapsed)
-        if delay > 0:
-            await asyncio.sleep(delay)
-        await db.messages.insert_one({
-            "id": str(uuid.uuid4()), "conversation_id": conv["id"], "sender": "ai",
-            "text": reply, "type": "text", "created_at": iso(now_utc()), "read": True})
-        await db.conversations.update_one({"id": conv["id"]}, {"$set": {
-            "last_message": reply, "last_message_at": iso(now_utc()),
-            "stato": "in_attesa"}})
-        await db.leads.update_one({"id": lead["id"]}, {"$set": {
-            "stato_pipeline": "in_attesa", "ultimo_contatto": iso(now_utc())}})
-        await whatsapp_send_text(wa_from, reply)
+
+    # (solo CORSO senza preferenza) l'AI Academy genera la risposta
+    reply = await ai_generate_reply(conv, lead)
+    # L'AI non inventa: token di richiamo → passa allo staff con frase naturale
+    fb_motivo, fb_phrase = detect_ai_fallback(reply)
+    if fb_motivo:
+        await asyncio.sleep(typing_seconds(fb_phrase))
+        await do_handoff(lead, conv, fb_motivo, fb_phrase)
+        await whatsapp_send_text(wa_from, fb_phrase)
+        return
+    # il "sta scrivendo…" resta attivo per un tempo proporzionale alla
+    # risposta, scontando il tempo già speso a generarla
+    elapsed = loop.time() - t0
+    delay = max(0.0, typing_seconds(reply) - elapsed)
+    if delay > 0:
+        await asyncio.sleep(delay)
+    await db.messages.insert_one({
+        "id": str(uuid.uuid4()), "conversation_id": conv["id"], "sender": "ai",
+        "text": reply, "type": "text", "created_at": iso(now_utc()), "read": True})
+    await db.conversations.update_one({"id": conv["id"]}, {"$set": {
+        "last_message": reply, "last_message_at": iso(now_utc()),
+        "stato": "in_attesa"}})
+    await db.leads.update_one({"id": lead["id"]}, {"$set": {
+        "stato_pipeline": "in_attesa", "ultimo_contatto": iso(now_utc())}})
+    await whatsapp_send_text(wa_from, reply)
 
 
 class WaConfigInput(BaseModel):
