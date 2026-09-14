@@ -35,7 +35,10 @@ export default function CreaCampagna() {
   const [etaMin, setEtaMin] = useState("25");
   const [etaMax, setEtaMax] = useState("55");
   const [budget, setBudget] = useState("10");
-  const [messaggio, setMessaggio] = useState("Ciao! Vorrei qualche informazione.");
+  const [messaggio, setMessaggio] = useState("Scopri di più, ti aspettiamo!");
+  const [waWelcome, setWaWelcome] = useState("Ciao! Come possiamo aiutarti?");
+  const [q1, setQ1] = useState("Quanto costa il trattamento?");
+  const [q2, setQ2] = useState("Posso fissare un appuntamento?");
 
   const [geoQuery, setGeoQuery] = useState("");
   const [geoResults, setGeoResults] = useState<Geo[]>([]);
@@ -133,7 +136,10 @@ export default function CreaCampagna() {
         eta_min: parseInt(etaMin) || 18, eta_max: parseInt(etaMax) || 65,
         budget_giornaliero_eur: parseFloat(budget) || 5,
         geo_keys: geoSel.map((g) => g.key), geo_countries: geoSel.length ? [] : ["IT"],
-        messaggio, image_hash: asset.image_hash, video_id: asset.video_id, thumb_url: asset.thumb_url,
+        testo_annuncio: messaggio,
+        wa_welcome: waWelcome,
+        wa_domande: [q1, q2].filter((x) => x.trim()),
+        image_hash: asset.image_hash, video_id: asset.video_id, thumb_url: asset.thumb_url,
       };
       const r = await api.post("/meta/campaigns/create", body);
       setResult(r);
@@ -252,9 +258,25 @@ export default function CreaCampagna() {
           </View>
         </View>
 
-        {/* 5. Messaggio */}
+        {/* 5. Testo annuncio */}
         <Text style={styles.section}>5 · Testo dell&apos;annuncio</Text>
-        <TextInput value={messaggio} onChangeText={setMessaggio} multiline style={[styles.input, { minHeight: 70, textAlignVertical: "top" }]} testID="messaggio" />
+        <Text style={styles.hintSmall}>La descrizione che accompagna foto/video su Facebook e Instagram.</Text>
+        <TextInput value={messaggio} onChangeText={setMessaggio} multiline style={[styles.input, { minHeight: 70, textAlignVertical: "top", marginTop: 6 }]} testID="messaggio" />
+
+        {/* 6. Messaggio WhatsApp (solo destinazione WhatsApp) */}
+        {dest === "whatsapp" && (
+          <>
+            <Text style={styles.section}>6 · Messaggio WhatsApp iniziale</Text>
+            <Text style={styles.hintSmall}>Il saluto che la cliente vede aprendo WhatsApp, con due domande rapide toccabili.</Text>
+            <Text style={styles.label}>Messaggio di benvenuto</Text>
+            <TextInput value={waWelcome} onChangeText={setWaWelcome} style={styles.input} testID="wa-welcome" />
+            <Text style={styles.label}>Domanda rapida 1</Text>
+            <TextInput value={q1} onChangeText={setQ1} style={styles.input} testID="wa-q1" maxLength={80} />
+            <Text style={styles.label}>Domanda rapida 2</Text>
+            <TextInput value={q2} onChangeText={setQ2} style={styles.input} testID="wa-q2" maxLength={80} />
+          </>
+        )}
+
 
         <View style={{ marginTop: spacing.lg }}>
           <GoldButton title={creating ? "Creazione in corso…" : "Crea campagna (in pausa)"} icon="target" onPress={create} disabled={creating} testID="create-campaign" />

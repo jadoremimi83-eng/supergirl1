@@ -220,3 +220,11 @@ admin@supergirl.app / Admin123! · operatore@supergirl.app / Operatore123!
 - Frontend `/altro/crea-campagna.tsx`: nella lista "Campagne create" ogni campagna ha badge ATTIVA/IN PAUSA + pulsante Attiva/Pausa + Elimina, con nota "In pausa non spende nulla". Funziona già prima del redeploy.
 - Upload da TUTTE le sorgenti: aggiunto expo-document-picker + pulsante "Scegli file dal computer (foto o video)" oltre alla galleria (accept image/* e video/*). Su desktop web apre il file dialog del sistema (qualsiasi cartella).
 
+
+## Meta: testo annuncio separato dal messaggio WhatsApp + 2 domande rapide (2026-06)
+- Separati i due concetti nel creatore campagne:
+  - `testo_annuncio` → didascalia dell'inserzione su FB/IG (object_story_spec link_data/video_data `message`).
+  - `wa_welcome` + `wa_domande` (max 3) → messaggio WhatsApp iniziale con ice-breakers cliccabili, via `page_welcome_message` nel creative.
+- Formato page_welcome_message FUNZIONANTE (testato e2e, il plain-string falliva): `{"type":"VISUAL_EDITOR","version":2,"landing_screen_type":"welcome_message","media_type":"text","text_format":{"customer_action_type":"ice_breakers","message":{"text":"...","ice_breakers":[{"title":"..."},{"title":"..."}]}}}`. Helper `_wa_welcome_json`. Solo per destinazione WhatsApp.
+- Frontend `/altro/crea-campagna.tsx`: Sezione "5 · Testo dell'annuncio" (didascalia FB/IG) e "6 · Messaggio WhatsApp iniziale" (benvenuto + Domanda rapida 1/2, visibile solo se destinazione=WhatsApp). Verificato via curl (creative+ad creati con ice_breakers) e screenshot desktop.
+

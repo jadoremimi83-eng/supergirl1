@@ -1613,12 +1613,25 @@ class MetaCampaignInput(BaseModel):
     end_time: Optional[str] = None
     geo_keys: List[str] = []                 # città/regioni (key da geo-search)
     geo_countries: List[str] = ["IT"]
-    messaggio: str = "Ciao! Vorrei qualche informazione."
-    welcome_message: str = "Ciao! Come possiamo aiutarti?"
+    messaggio: str = "Scopri di più, ti aspettiamo!"
+    testo_annuncio: Optional[str] = None
+    wa_welcome: str = "Ciao! Come possiamo aiutarti?"
+    wa_domande: List[str] = ["Quanto costa il trattamento?", "Posso fissare un appuntamento?"]
     image_hash: Optional[str] = None
     video_id: Optional[str] = None
     thumb_url: Optional[str] = None
     link: str = "https://wa.me/"
+
+
+def _wa_welcome_json(text: str, domande: List[str]) -> str:
+    ib = [{"title": d.strip()[:80]} for d in (domande or []) if d and d.strip()][:3]
+    if not ib:
+        ib = [{"title": "Quanto costa il trattamento?"}, {"title": "Posso fissare un appuntamento?"}]
+    return json.dumps({"type": "VISUAL_EDITOR", "version": 2,
+                       "landing_screen_type": "welcome_message", "media_type": "text",
+                       "text_format": {"customer_action_type": "ice_breakers",
+                                       "message": {"text": (text or "Ciao! Come possiamo aiutarti?")[:300],
+                                                   "ice_breakers": ib}}})
 
 
 @api.post("/meta/upload-asset")
@@ -1736,13 +1749,20 @@ async def meta_create_campaign(body: MetaCampaignInput, user: dict = Depends(req
         cta = {"type": "WHATSAPP_MESSAGE", "value": {"app_destination": "WHATSAPP"}}
 
     story: dict = {"page_id": META_PAGE_ID}
+    caption = body.testo_annuncio or body.messaggio
+    welcome = _wa_welcome_json(body.wa_welcome, body.wa_domande) if not is_lead else None
     if body.video_id:
         await _wait_video_ready(body.video_id)
-        story["video_data"] = {"video_id": body.video_id, "message": body.messaggio,
-                               "call_to_action": cta}
+        vd = {"video_id": body.video_id, "message": caption, "call_to_action": cta}
+        if welcome:
+            vd["page_welcome_message"] = welcome
+        story["video_data"] = vd
     else:
-        story["link_data"] = {"image_hash": body.image_hash, "link": body.link,
-                              "message": body.messaggio, "call_to_action": cta}
+        ld = {"image_hash": body.image_hash, "link": body.link,
+              "message": caption, "call_to_action": cta}
+        if welcome:
+            ld["page_welcome_message"] = welcome
+        story["link_data"] = ld
 
     creative_base = {"name": f"{name} — Creatività",
                      "object_story_spec": json.dumps(story)}
