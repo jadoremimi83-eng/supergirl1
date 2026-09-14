@@ -26,6 +26,8 @@ export default function Clienti() {
       if (f.servizio) p.append("servizio", f.servizio);
       if (f.stato_pipeline) p.append("stato", f.stato_pipeline);
       if (f.temperature) p.append("temperature", f.temperature);
+      if (f.campagna) p.append("campagna", f.campagna);
+      if (f.canale) p.append("canale", f.canale);
       const qs = p.toString();
       const res = await api.get(`/leads${qs ? `?${qs}` : ""}`);
       setLeads(res);
@@ -121,6 +123,8 @@ export default function Clienti() {
       {showFilters && segments ? (
         <View style={styles.filterPanel}>
           {[
+            { key: "canale", label: "Fonte lead", data: segments.canale },
+            { key: "campagna", label: "Campagna", data: segments.campagna },
             { key: "sede", label: "Sede", data: segments.sede },
             { key: "servizio", label: "Trattamento", data: segments.servizio },
             { key: "stato_pipeline", label: "Stato", data: segments.stato_pipeline },

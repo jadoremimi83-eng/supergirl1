@@ -679,6 +679,7 @@ async def simulate_ai_turn(conv_id: str, user: dict = Depends(current_user)):
 async def list_leads(search: Optional[str] = None, stato: Optional[str] = None,
                      sede: Optional[str] = None, servizio: Optional[str] = None,
                      temperature: Optional[str] = None,
+                     campagna: Optional[str] = None, canale: Optional[str] = None,
                      user: dict = Depends(current_user)):
     query: dict = {}
     if stato:
@@ -689,6 +690,13 @@ async def list_leads(search: Optional[str] = None, stato: Optional[str] = None,
         query["servizio"] = servizio
     if temperature:
         query["temperature"] = temperature
+    if campagna:
+        query["campagna"] = campagna
+    if canale:
+        if canale == "Modulo":
+            query["origine"] = "meta"
+        elif canale == "WhatsApp":
+            query["origine"] = {"$in": ["whatsapp_organico", "whatsapp_ad"]}
     if search:
         s = search.strip()
         query["$or"] = [
@@ -715,12 +723,28 @@ async def lead_segments(user: dict = Depends(current_user)):
         return [{"value": k, "count": v} for k, v in
                 sorted(out.items(), key=lambda x: -x[1])]
 
+    def canale_counts():
+        out: dict = {}
+        for l in leads:
+            org = l.get("origine") or ""
+            if org == "meta":
+                lbl = "Modulo"
+            elif org.startswith("whatsapp"):
+                lbl = "WhatsApp"
+            else:
+                continue
+            out[lbl] = out.get(lbl, 0) + 1
+        return [{"value": k, "count": v} for k, v in
+                sorted(out.items(), key=lambda x: -x[1])]
+
     return {
         "total": len(leads),
         "sede": counts("sede"),
         "servizio": counts("servizio"),
         "stato_pipeline": counts("stato_pipeline"),
         "temperature": counts("temperature"),
+        "campagna": counts("campagna"),
+        "canale": canale_counts(),
     }
 
 
