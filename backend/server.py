@@ -2540,15 +2540,17 @@ async def handle_trattamento_turn(conv: dict, lead: dict, text: str):
                  f"• Quanto costa il trattamento?\n• Posso fissare un appuntamento?")
         return True, reply, True, True
 
-    # 6) altra domanda sul trattamento → risposta basata SOLO sulla scheda
+    # 6) altra domanda sul trattamento → risposta basata SOLO sulla scheda,
+    #    poi SEMPRE spinta verso richiamo/appuntamento (mai fermarsi all'informazione)
     reply = await ai_answer_from_scheda(conv, lead)
     fb_motivo, _ = detect_ai_fallback(reply)
     if fb_motivo:
         await _tratt_to_richiamare(lead, conv, "Info non presente nella scheda: da richiamare")
         return True, INFO_PRECISA, False, False
-    await db.leads.update_one({"id": lead["id"]}, {"$set": {
-        "stato_pipeline": "ai_conversazione", "ultimo_contatto": iso(now_utc())}})
-    return True, reply, True, False
+    closing = ("Verifico subito le disponibilità rimaste e ti richiamo per dirti quali orari "
+               "sono ancora disponibili, così possiamo fissare il tuo appuntamento.")
+    await _tratt_to_richiamare(lead, conv, "Ha ricevuto le info: verifico disponibilità e richiamo")
+    return True, f"{reply}\n\n{closing}", False, False
 
 
 # --- Reminder chiamate corso: avviso + push 1 ora prima ---
