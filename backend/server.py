@@ -252,6 +252,8 @@ def build_ai_summary(lead: dict, messages: List[dict], motivo: str) -> str:
         "prenotazione": "La cliente ha manifestato l'intenzione concreta di prenotare.",
         "richiesta_operatore": "La cliente ha chiesto esplicitamente di parlare con una persona.",
         "situazione_delicata": "Situazione delicata: meglio l'intervento umano.",
+        "info_da_verificare": "L'AI non aveva un'informazione certa: richiamare la cliente con i dettagli richiesti.",
+        "info_medica": "Domanda su tema medico/delicato: da gestire a voce con la cliente.",
         "manuale": "Presa in carico manualmente dallo staff.",
     }.get(motivo, "Passaggio allo staff.")
     temp_label = {t["key"]: t["label"] for t in TEMPERATURES}.get(
@@ -360,7 +362,8 @@ async def do_handoff(lead: dict, conv: dict, motivo: str, ai_message: str):
     await db.messages.insert_one(msg)
 
     from_status = lead["stato_pipeline"]
-    new_status = "attesa_chiamata" if motivo == "prenotazione" else "da_fissare"
+    new_status = "attesa_chiamata" if motivo in (
+        "prenotazione", "info_da_verificare", "info_medica") else "da_fissare"
     await cancel_followups(lead["id"])
     summary = None
     # ricostruisci messaggi aggiornati per il riassunto
@@ -393,18 +396,24 @@ async def do_handoff(lead: dict, conv: dict, motivo: str, ai_message: str):
     })
     tipo = "cliente_da_fissare" if motivo == "prenotazione" else "ai_intervento"
     await create_notification(tipo, lead, ai_message)
-    if motivo == "prenotazione":
+    if motivo in ("prenotazione", "info_da_verificare", "info_medica"):
         nome = f"{lead['nome']} {lead['cognome']}".strip()
         extra = ""
         if lead.get("servizio"):
             extra += f" · {lead['servizio']}"
         if lead.get("sede"):
             extra += f" · {lead['sede']}"
-        await notify_staff_push(
-            "Nuovo appuntamento da fissare 💎",
-            f"{nome} vuole fissare un appuntamento{extra}",
-            f"/conversation/{conv['id']}",
-        )
+        push_title = {
+            "prenotazione": "Nuovo appuntamento da fissare 💎",
+            "info_da_verificare": "Lead da richiamare",
+            "info_medica": "Lead da richiamare (tema medico)",
+        }[motivo]
+        push_body = {
+            "prenotazione": f"{nome} vuole fissare un appuntamento{extra}",
+            "info_da_verificare": f"{nome} attende un richiamo con le info richieste{extra}",
+            "info_medica": f"{nome} ha una domanda su un tema medico: richiamare a voce{extra}",
+        }[motivo]
+        await notify_staff_push(push_title, push_body, f"/conversation/{conv['id']}")
     clean_msg = {k: v for k, v in msg.items() if k != "_id"}
     return clean_msg, summary, new_status
 
@@ -561,6 +570,12 @@ async def simulate_ai_turn(conv_id: str, user: dict = Depends(current_user)):
 
     # Altrimenti: l'AI commerciale reale genera la prossima risposta
     reply_text = await ai_generate_reply(conv, lead)
+    # L'AI non inventa: se ha emesso un token di richiamo → handoff con frase naturale
+    fb_motivo, fb_phrase = detect_ai_fallback(reply_text)
+    if fb_motivo:
+        reply, summary, new_status = await do_handoff(lead, conv, fb_motivo, fb_phrase)
+        return {"message": reply, "handoff": True, "motivo": fb_motivo,
+                "summary": summary, "new_status": new_status}
     msg = {
         "id": str(uuid.uuid4()),
         "conversation_id": conv_id,
@@ -1482,8 +1497,18 @@ async def build_ai_system_prompt(lead: dict) -> str:
         f"Non rivelare mai di essere un assistente automatico o un'AI.\n"
         f"{prezzo_rule}"
         f"Quando indichi un prezzo, prima capisci l'obiettivo della cliente, poi proponi la soluzione.\n\n"
-        f"REGOLA FONDAMENTALE: non inventare mai informazioni (prezzi, promo, risultati). Se non conosci una "
-        f"risposta, di' che verifichi con il team e che lo staff ricontatta.\n\n"
+        f"REGOLA ANTI-INVENZIONE (FONDAMENTALE E NON NEGOZIABILE): puoi usare SOLO le informazioni presenti "
+        f"nei DETTAGLI TRATTAMENTO e nella KNOWLEDGE BASE qui sotto. NON inventare MAI prezzi, promozioni, "
+        f"risultati, tempi, numero di sedute, dettagli tecnici o qualsiasi dato non scritto qui. Se la cliente "
+        f"chiede qualcosa che NON trovi in queste informazioni, oppure la domanda è troppo specifica per "
+        f"rispondere con certezza, NON tirare a indovinare e NON dare risposte generiche: rispondi ESATTAMENTE "
+        f"e SOLO con il token [[RICHIAMO]] (esattamente così, senza aggiungere altro testo, né saluti né emoji). "
+        f"Il sistema lo sostituirà con la frase giusta e farà richiamare la cliente dallo staff.\n"
+        f"REGOLA TEMI MEDICI/DELICATI (NON NEGOZIABILE): se la cliente chiede di controindicazioni, "
+        f"gravidanza o allattamento, patologie, farmaci, interventi, condizioni mediche/sanitarie o qualsiasi "
+        f"tema medico delicato, NON dare MAI indicazioni mediche e NON rassicurare: rispondi ESATTAMENTE e SOLO "
+        f"con il token [[RICHIAMO_MEDICO]] (esattamente così, senza altro testo). Il sistema farà richiamare la "
+        f"cliente a voce dallo staff.\n\n"
         f"CONTESTO LEAD: nome={lead.get('nome')}, trattamento d'interesse={servizio}, "
         f"sede={lead.get('sede') or 'NON INDICATA'}, campagna={lead.get('campagna')}.\n"
         f"SEDI DISPONIBILI: Milano e Verona. Se la sede del lead è NON INDICATA, a un certo "
@@ -1522,6 +1547,26 @@ def strip_hearts(text: str) -> str:
     return re.sub(r"[ \t]{2,}", " ", cleaned).strip()
 
 
+# --- Fallback "richiamo" (Modulo A): l'AI non inventa mai ---
+FALLBACK_GENERALE = ("Ok cara, ti richiamo a breve così ti do le disponibilità rimaste "
+                     "e scegliamo l'orario migliore per te!")
+FALLBACK_MEDICO = "Guarda, ti richiamo subito così ti spiego tutto a voce!"
+
+
+def detect_ai_fallback(reply: str):
+    """Se l'AI ha emesso un token di richiamo, ritorna (motivo, frase_naturale).
+    Serve a garantire che l'assistente non inventi mai: quando non ha
+    un'informazione certa o il tema è medico, passa la cliente allo staff."""
+    if not reply:
+        return (None, None)
+    up = reply.upper()
+    if "[[RICHIAMO_MEDICO]]" in up:
+        return ("info_medica", FALLBACK_MEDICO)
+    if "[[RICHIAMO]]" in up:
+        return ("info_da_verificare", FALLBACK_GENERALE)
+    return (None, None)
+
+
 async def ai_generate_reply(conv: dict, lead: dict) -> str:
     """Genera la prossima risposta commerciale dell'AI dato lo storico chat."""
     msgs = await db.messages.find(
@@ -1535,7 +1580,9 @@ async def ai_generate_reply(conv: dict, lead: dict) -> str:
         f"Scrivi SOLO il prossimo messaggio di {ASSISTANT_NAME} alla cliente. "
         f"Rispetta lo STILE NATURALE: varia l'apertura (NON iniziare sempre con Certo/Perfetto/"
         f"Assolutamente), niente cuori, emoji solo di rado. Se la domanda è semplice rispondi breve; "
-        f"fai al massimo UNA domanda e non sempre; non ripetere cose già dette."
+        f"fai al massimo UNA domanda e non sempre; non ripetere cose già dette. "
+        f"Se non hai un'informazione certa nella Knowledge Base usa il token [[RICHIAMO]]; "
+        f"se è un tema medico/delicato usa il token [[RICHIAMO_MEDICO]] (non inventare mai)."
     )
     try:
         chat = LlmChat(api_key=EMERGENT_LLM_KEY, session_id=conv["id"],
@@ -1545,6 +1592,53 @@ async def ai_generate_reply(conv: dict, lead: dict) -> str:
     except Exception as e:  # noqa
         logger.error(f"AI error: {e}")
         return ("Grazie del messaggio! Qual è il risultato principale che vorresti ottenere?")
+
+
+class KbTestMsg(BaseModel):
+    sender: str  # "cliente" | "ai"
+    text: str
+
+
+class KbTestInput(BaseModel):
+    servizio: Optional[str] = None
+    sede: Optional[str] = "Milano"
+    messages: list[KbTestMsg] = []
+
+
+@api.post("/kb/test")
+async def kb_test(body: KbTestInput, user: dict = Depends(require_admin)):
+    """Simulazione 'Test Andrea': risponde con la KB corrente, SENZA scrivere nulla nel DB."""
+    lead = {
+        "nome": "Cliente", "cognome": "Test", "servizio": body.servizio or "",
+        "sede": body.sede or "Milano", "stato_pipeline": "ai_conversazione",
+        "data_acquisizione": iso(now_utc()), "temperatura": "calda", "provenienza": "test",
+    }
+    system = await build_ai_system_prompt(lead)
+    transcript = "\n".join(
+        f"[{'Cliente' if m.sender == 'cliente' else ASSISTANT_NAME}]: {m.text}"
+        for m in body.messages)
+    prompt = (
+        f"Conversazione WhatsApp finora:\n{transcript}\n\n"
+        f"Scrivi SOLO il prossimo messaggio di {ASSISTANT_NAME} alla cliente, "
+        f"rispettando le regole: usa SOLO informazioni della Knowledge Base, non inventare mai. "
+        f"Se non hai un'informazione certa usa il token [[RICHIAMO]]; se è un tema medico/delicato "
+        f"usa il token [[RICHIAMO_MEDICO]] (come da regole del sistema).")
+    try:
+        chat = LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f"kbtest-{user['id']}",
+                       system_message=system).with_model(AI_PROVIDER, AI_MODEL)
+        reply = await chat.send_message(UserMessage(text=prompt))
+        reply = strip_hearts((reply or "").strip())
+        fb_motivo, fb_phrase = detect_ai_fallback(reply)
+        if fb_motivo:
+            label = ("IN ATTESA DI CHIAMATA (tema medico)" if fb_motivo == "info_medica"
+                     else "IN ATTESA DI CHIAMATA")
+            return {"reply": fb_phrase, "fallback": True, "motivo": fb_motivo,
+                    "note": f"Andrea non ha inventato: la cliente verrebbe spostata in «{label}» "
+                            f"con notifica all'operatrice."}
+        return {"reply": reply}
+    except Exception as e:  # noqa
+        return {"reply": "", "error": str(e)[:200]}
+
 
 
 # ---------------------------------------------------------------------------
@@ -2005,6 +2099,13 @@ async def handle_inbound_wa(m: dict, value: dict):
         await whatsapp_send_text(wa_from, ai_msg)
     else:
         reply = await ai_generate_reply(conv, lead)
+        # L'AI non inventa: token di richiamo → passa allo staff con frase naturale
+        fb_motivo, fb_phrase = detect_ai_fallback(reply)
+        if fb_motivo:
+            await asyncio.sleep(typing_seconds(fb_phrase))
+            await do_handoff(lead, conv, fb_motivo, fb_phrase)
+            await whatsapp_send_text(wa_from, fb_phrase)
+            return
         # il "sta scrivendo…" resta attivo per un tempo proporzionale alla
         # risposta, scontando il tempo già speso a generarla
         elapsed = loop.time() - t0

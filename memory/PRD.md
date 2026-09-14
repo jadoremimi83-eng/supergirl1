@@ -162,3 +162,17 @@ admin@supergirl.app / Admin123! · operatore@supergirl.app / Operatore123!
 ## Setup Meta Lead Ads (2026-06)
 - Token Pagina validato (Pagina "J'adore Mimì 2025", id 489009670970857, app 1080460221022637; scopes: leads_retrieval, ads_management, pages_read_engagement, pages_show_list). Scadenza ~set 2026 (non permanente → valutare System User token).
 - Sottoscrizione Pagina→app `leadgen`: success:true. Sottoscrizione app-level object=page fields=leadgen callback `https://ai-conversion-4.emergent.host/api/integrations/meta/webhook` verify token `sg_meta_verify_...` → active:true (Meta ha verificato la callback). App-secret firma webhook OK (403 su firma errata). Secrets Meta salvati in `/app/backend/.env` (anteprima); su deployato mancano PAGE_ID/PAGE_TOKEN/APP_ID.
+
+## Modulo A — Test Andrea + AI severa su Knowledge Base + fallback umano (2026-06)
+- **Test Andrea** (simulatore): endpoint `POST /api/kb/test` (admin) risponde con la KB corrente SENZA scrivere sul DB. Schermata `/altro/test-andrea` ora collegata nel menu Altro (voce "Test Andrea", solo admin). Selettore trattamento + sede, chat, reset.
+- **AI ANTI-INVENZIONE** (build_ai_system_prompt): due regole non negoziabili con token sentinella:
+  - Info non presente in KB / troppo specifica → l'AI emette SOLO `[[RICHIAMO]]`.
+  - Tema medico/delicato (controindicazioni, gravidanza, patologie, farmaci…) → l'AI emette SOLO `[[RICHIAMO_MEDICO]]`.
+- `detect_ai_fallback(reply)` intercetta i token e li sostituisce con frasi naturali fisse:
+  - generale → "Ok cara, ti richiamo a breve così ti do le disponibilità rimaste e scegliamo l'orario migliore per te!"
+  - medico → "Guarda, ti richiamo subito così ti spiego tutto a voce!"
+- I motivi `info_da_verificare` e `info_medica` fanno `do_handoff` → stato **attesa_chiamata** (IN ATTESA DI CHIAMATA) + notifica + push allo staff (titoli dedicati). build_ai_summary aggiornato con le nuove etichette.
+- Integrato su TUTTI i canali: `simulate-ai-turn`, `handle_inbound_wa` (WhatsApp reale) e `/kb/test` (che mostra anche una nota "verrebbe spostata in …").
+- Testato: curl (medico→[[RICHIAMO_MEDICO]], info non-KB→[[RICHIAMO]], normale→risposta commerciale) + screenshot desktop autenticato (flusso completo con nota di handoff). Nessun testing_agent, nessun deploy (crediti).
+- SOLO codice → per la produzione servirà un redeploy quando l'utente lo richiederà. PROSSIMO (in attesa approvazione utente): Modulo B (Corsi vs Trattamenti), C (Meta Campaign Creator), D (asset resizing).
+

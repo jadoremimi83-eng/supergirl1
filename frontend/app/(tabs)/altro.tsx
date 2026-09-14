@@ -14,6 +14,7 @@ const ITEMS = [
   { key: "campagne", label: "Campagne", desc: "Campagne Meta e lead collegati", icon: "target", route: "/altro/campagne" },
   { key: "team", label: "Team", desc: "Utenti e ruoli", icon: "users", route: "/altro/team" },
   { key: "kb", label: "Conoscenza AI", desc: "Knowledge Base dell'assistente", icon: "book-open", route: "/altro/conoscenza-ai", admin: true },
+  { key: "test-andrea", label: "Test Andrea", desc: "Prova le risposte dell'AI sulla Knowledge Base", icon: "message-circle", route: "/altro/test-andrea", admin: true },
   { key: "integrazioni", label: "Integrazioni", desc: "Meta, WhatsApp, AI (Fase 2/3/4)", icon: "link", route: "/altro/integrazioni" },
   { key: "impostazioni", label: "Impostazioni", desc: "Account, follow-up, notifiche", icon: "settings", route: "/altro/impostazioni" },
 ];
