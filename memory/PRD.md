@@ -201,3 +201,15 @@ admin@supergirl.app / Admin123! · operatore@supergirl.app / Operatore123!
 - Le schede Trattamenti si compilano già in-app (foto/descrizione/info/faq/prezzo/promozione) e Andrea le usa in automatico.
 - Testato via curl: menu → prezzo (Bomba 300→150, scadenza +10gg) → booking/medico/can't-talk (orario salvato) → domande coperte dalla scheda (durata/invasivo: risposta corretta) → domanda non coperta (macchinario: → richiamata). Nessun deploy/testing_agent (crediti). Serve redeploy per la produzione.
 
+
+## Modulo C — Creazione campagne Meta (Marketing API) (2026-06) — DESKTOP
+- Verificato in diretta: token System User valido con ads_management/ads_read/pages_manage_ads/business_management/leads_retrieval; Ad Account **act_970420198298576** ("J'adore mimi 3 Simone", EUR, attivo). Aggiunto `META_AD_ACCOUNT_ID` in backend/.env.
+- Helper Marketing API: `graph_post` (con appsecret_proof + retry su errori transitori code 2), `graph_get2`. VIDEO_GRAPH per /advideos.
+- Endpoint: `GET /api/meta/ad-account` (verifica), `GET /api/meta/geo-search?q=` (adgeolocation città/regioni), `POST /api/meta/upload-asset` (foto→/adimages, video→/advideos, salva anche in object storage per anteprima), `POST /api/meta/campaigns/create` (Campaign→AdSet→Creative→Ad, tutto PAUSED, prefisso SG-), `GET /api/meta/campaigns/created`, `GET /api/meta/preview/{creative_id}` (anteprime reali via generatepreviews per Feed/IG Feed/Story/Reels).
+- Payload chiave scoperti nei test reali: campaign richiede `is_adset_budget_sharing_enabled:false`; adset richiede `bid_strategy:LOWEST_COST_WITHOUT_CAP` + `targeting_automation.advantage_audience:0`; radius città 25km (15km rifiutato); **NON** mettere `page_welcome_message` nel creative (fa fallire l'ad con code 2). Advantage+ adattamento via `degrees_of_freedom_spec.adapt_to_placement` (fallback a creative base se errore).
+- Destinazione WhatsApp (OUTCOME_ENGAGEMENT, CONVERSATIONS, destination_type WHATSAPP, CTA WHATSAPP_MESSAGE) o Modulo (OUTCOME_LEADS, ON_AD, SIGN_UP + lead_gen_form_id).
+- Le campagne create sono registrate anche nel CRM (ensure_campaign) col nome SG- così i lead vengono riconosciuti.
+- Frontend DESKTOP: `/altro/crea-campagna.tsx` (centrata maxWidth 720): stato account, upload foto/video (expo-image-picker All), nome+SG-, WhatsApp/Modulo, Facebook/Instagram, ricerca sede/area con autocomplete Meta, genere, età min/max, budget/giorno, testo annuncio, creazione in PAUSA + anteprime per placement (Linking.openURL) + lista campagne create. Link nel menu Altro (admin).
+- Testato e2e via curl: upload immagine → creazione completa (campaign/adset/creative/ad PAUSED) → 4 anteprime → pulizia oggetti di test da Meta e DB. Screenshot desktop OK. Video: endpoint pronto (/advideos + attesa transcodifica), da validare con un video reale dopo deploy. Nessun testing_agent.
+- RIMANE: Modulo D avanzato (ritaglio locale con protezione volti/testi/logo — ora l'adattamento è affidato ad Advantage+ di Meta) e Fonte Lead nella scheda contatto.
+

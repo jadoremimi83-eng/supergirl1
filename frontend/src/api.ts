@@ -19,7 +19,11 @@ async function request(path: string, options: RequestInit = {}) {
     let detail = "Errore di rete";
     try {
       const body = await res.json();
-      detail = body.detail || detail;
+      const d = body.detail;
+      if (typeof d === "string") detail = d;
+      else if (d?.meta_error?.error?.error_user_msg) detail = d.meta_error.error.error_user_msg;
+      else if (d?.meta_error?.error?.message) detail = d.meta_error.error.message;
+      else if (d) detail = JSON.stringify(d);
     } catch {}
     throw new Error(detail);
   }
@@ -53,5 +57,29 @@ export async function uploadImage(uri: string, name = "photo.jpg", type = "image
     body: form,
   });
   if (!res.ok) throw new Error("Upload non riuscito");
+  return res.json();
+}
+
+// Upload asset Meta (foto O video) → ritorna { type, image_hash|video_id, thumb_url }
+export async function uploadMetaAsset(uri: string, name: string, type: string) {
+  const { Platform } = require("react-native");
+  const token = await storage.secureGet<string>(TOKEN_KEY, "");
+  const form = new FormData();
+  if (Platform.OS === "web") {
+    const blob = await (await fetch(uri)).blob();
+    form.append("file", blob, name);
+  } else {
+    form.append("file", { uri, name, type } as any);
+  }
+  const res = await fetch(`${BASE}/api/meta/upload-asset`, {
+    method: "POST",
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: form,
+  });
+  if (!res.ok) {
+    let d = "Upload non riuscito";
+    try { const b = await res.json(); d = b.detail?.meta_error?.error?.error_user_msg || b.detail || d; } catch {}
+    throw new Error(typeof d === "string" ? d : "Upload non riuscito");
+  }
   return res.json();
 }

@@ -7,6 +7,7 @@ l'implementazione interna senza toccare frontend o schema.
 import os
 import re
 import json
+import base64
 import uuid
 import hmac
 import hashlib
@@ -54,6 +55,7 @@ META_PAGE_ACCESS_TOKEN = os.environ.get("META_PAGE_ACCESS_TOKEN", "REPLACE_ME")
 META_PAGE_ID = os.environ.get("META_PAGE_ID", "REPLACE_ME")
 META_VERIFY_TOKEN = os.environ.get("META_VERIFY_TOKEN", "")
 META_API_VERSION = os.environ.get("META_API_VERSION", "v21.0")
+META_AD_ACCOUNT_ID = os.environ.get("META_AD_ACCOUNT_ID", "")
 # Regola di importazione: SOLO i moduli Meta il cui nome inizia con questo prefisso.
 SG_FORM_PREFIX = os.environ.get("META_FORM_PREFIX", "SG -")
 # Prefisso SG- (accetta "SG-", "SG -", case-insensitive) per moduli, campagne e annunci.
@@ -1271,6 +1273,55 @@ async def graph_get(node: str, fields: str) -> dict:
     return r.json()
 
 
+# ---------------------------------------------------------------------------
+# META MARKETING API — creazione sponsorizzate (Modulo C+D)
+# ---------------------------------------------------------------------------
+VIDEO_GRAPH = f"https://graph-video.facebook.com/{META_API_VERSION}"
+
+
+def _meta_appsecret_proof() -> Optional[str]:
+    if META_APP_SECRET and META_APP_SECRET != "REPLACE_ME":
+        return hmac.new(META_APP_SECRET.encode(), META_PAGE_ACCESS_TOKEN.encode(),
+                        hashlib.sha256).hexdigest()
+    return None
+
+
+def _meta_auth(data: dict = None) -> dict:
+    data = dict(data or {})
+    data["access_token"] = META_PAGE_ACCESS_TOKEN
+    proof = _meta_appsecret_proof()
+    if proof:
+        data["appsecret_proof"] = proof
+    return data
+
+
+async def graph_post(path: str, data: dict = None, files: dict = None, video: bool = False) -> dict:
+    url = (VIDEO_GRAPH if video else GRAPH) + path
+    last_detail = None
+    for attempt in range(3):
+        async with httpx.AsyncClient(timeout=180) as c:
+            r = await c.post(url, data=_meta_auth(data), files=files)
+        if not r.is_error:
+            return r.json()
+        detail = r.json() if r.content else {"error": {"message": r.text}}
+        last_detail = detail
+        err = (detail.get("error") or {}) if isinstance(detail, dict) else {}
+        is_transient = err.get("is_transient") or err.get("code") == 2
+        if is_transient and attempt < 2:
+            await asyncio.sleep(2 + attempt * 2)
+            continue
+        raise HTTPException(502, detail={"meta_error": detail})
+    raise HTTPException(502, detail={"meta_error": last_detail})
+
+
+async def graph_get2(node: str, params: dict = None) -> dict:
+    async with httpx.AsyncClient(timeout=30) as c:
+        r = await c.get(f"{GRAPH}/{node}", params=_meta_auth(params))
+    if r.is_error:
+        raise HTTPException(502, detail={"meta_error": r.json() if r.content else r.text})
+    return r.json()
+
+
 def _field_map(field_data: list) -> dict:
     return {x["name"]: (x.get("values") or [None])[0]
             for x in field_data if x.get("name")}
@@ -1499,6 +1550,254 @@ async def meta_simulate(body: SimLeadInput, user: dict = Depends(require_admin))
     """Simula la ricezione di un lead da Meta (test Fase 2, senza API reali)."""
     res = await ingest_meta_lead(body.dict())
     return res
+
+
+# ---------------------------------------------------------------------------
+# META MARKETING API — creazione sponsorizzate SG- (in PAUSA)
+# ---------------------------------------------------------------------------
+def _ad_account() -> str:
+    acct = META_AD_ACCOUNT_ID
+    if not acct:
+        raise HTTPException(400, "Account pubblicitario Meta non configurato (META_AD_ACCOUNT_ID).")
+    return acct if acct.startswith("act_") else f"act_{acct}"
+
+
+def _sg_name(name: str) -> str:
+    """Garantisce il prefisso SG- sul nome campagna."""
+    name = (name or "").strip() or "Campagna"
+    return name if sg_prefixed(name) else f"SG- {name}"
+
+
+@api.get("/meta/ad-account")
+async def meta_ad_account(user: dict = Depends(require_admin)):
+    """Verifica account pubblicitario e permessi del token."""
+    try:
+        acct = await graph_get2(_ad_account(),
+                                {"fields": "id,account_id,name,account_status,currency"})
+        return {"configured": True, "account": acct, "page_id": META_PAGE_ID}
+    except HTTPException as e:
+        return {"configured": False, "error": e.detail}
+
+
+@api.get("/meta/geo-search")
+async def meta_geo_search(q: str, user: dict = Depends(require_admin)):
+    """Ricerca località (città/regioni) per il targeting geografico."""
+    if not q or len(q) < 2:
+        return []
+    res = await graph_get2("search", {
+        "type": "adgeolocation",
+        "location_types": json.dumps(["city", "region", "country"]),
+        "q": q, "limit": 12})
+    out = []
+    for d in res.get("data", []):
+        label = d.get("name", "")
+        if d.get("region") and d.get("type") == "city":
+            label += f", {d['region']}"
+        if d.get("country_name"):
+            label += f" ({d['country_name']})"
+        out.append({"key": d.get("key"), "type": d.get("type"), "name": label,
+                    "country_code": d.get("country_code")})
+    return out
+
+
+class MetaCampaignInput(BaseModel):
+    nome: str
+    destinazione: str = "whatsapp"           # whatsapp | modulo
+    lead_form_id: Optional[str] = None
+    piattaforme: List[str] = ["facebook", "instagram"]
+    genere: str = "tutti"                    # tutti | donne | uomini
+    eta_min: int = 18
+    eta_max: int = 65
+    budget_giornaliero_eur: float = 10.0
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
+    geo_keys: List[str] = []                 # città/regioni (key da geo-search)
+    geo_countries: List[str] = ["IT"]
+    messaggio: str = "Ciao! Vorrei qualche informazione."
+    welcome_message: str = "Ciao! Come possiamo aiutarti?"
+    image_hash: Optional[str] = None
+    video_id: Optional[str] = None
+    thumb_url: Optional[str] = None
+    link: str = "https://wa.me/"
+
+
+@api.post("/meta/upload-asset")
+async def meta_upload_asset(file: UploadFile = File(...), user: dict = Depends(require_admin)):
+    """Carica UNA foto o UN video nell'account pubblicitario Meta.
+    Ritorna image_hash (foto) o video_id (video)."""
+    acct = _ad_account()
+    content = await file.read()
+    ctype = (file.content_type or "").lower()
+    fname = file.filename or "asset"
+    is_video = ctype.startswith("video") or fname.lower().endswith((".mp4", ".mov", ".m4v", ".avi"))
+    thumb_url = None
+    try:
+        ext = (fname.rsplit(".", 1)[-1].lower() if "." in fname else ("mp4" if is_video else "jpg"))
+        spath = f"supergirl/meta/{user['id']}/{uuid.uuid4()}.{ext}"
+        await run_in_threadpool(_put_object, spath, content, ctype or "application/octet-stream")
+        thumb_url = f"/api/files/{spath}"
+    except Exception as e:  # noqa
+        logger.warning(f"meta asset storage failed: {e}")
+    if is_video:
+        res = await graph_post(f"/{acct}/advideos",
+                               {"title": fname},
+                               files={"source": (fname, content, ctype or "video/mp4")},
+                               video=True)
+        vid = res.get("id") or res.get("video_id")
+        if not vid:
+            raise HTTPException(502, detail={"meta_error": res})
+        return {"type": "video", "video_id": vid, "thumb_url": thumb_url}
+    else:
+        res = await graph_post(f"/{acct}/adimages",
+                               {"bytes": base64.b64encode(content).decode("ascii")})
+        img = res.get("images", {})
+        image_hash = next((v.get("hash") for v in img.values()), None) or next(iter(img), None)
+        if not image_hash:
+            raise HTTPException(502, detail={"meta_error": res})
+        return {"type": "image", "image_hash": image_hash, "thumb_url": thumb_url}
+
+
+async def _wait_video_ready(video_id: str, tries: int = 20):
+    for _ in range(tries):
+        try:
+            st = await graph_get2(video_id, {"fields": "status"})
+            status = (st.get("status") or {})
+            if status.get("video_status") == "ready" or status.get("processing_progress") == 100:
+                return True
+        except Exception:  # noqa
+            pass
+        await asyncio.sleep(3)
+    return False
+
+
+@api.post("/meta/campaigns/create")
+async def meta_create_campaign(body: MetaCampaignInput, user: dict = Depends(require_admin)):
+    """Crea Campagna → Ad Set → Creatività → Ad, tutto in PAUSA, prefisso SG-.
+    Adattamento formati automatico via Advantage+ (senza bande nere)."""
+    acct = _ad_account()
+    if not body.image_hash and not body.video_id:
+        raise HTTPException(400, "Carica prima una foto o un video.")
+    name = _sg_name(body.nome)
+
+    is_lead = body.destinazione == "modulo"
+    objective = "OUTCOME_LEADS" if is_lead else "OUTCOME_ENGAGEMENT"
+    campaign = await graph_post(f"/{acct}/campaigns", {
+        "name": name, "objective": objective,
+        "special_ad_categories": json.dumps([]),
+        "is_adset_budget_sharing_enabled": "false",
+        "status": "PAUSED"})
+    campaign_id = campaign["id"]
+
+    genders = {"donne": [2], "uomini": [1]}.get(body.genere)
+    geo: dict = {"countries": body.geo_countries or ["IT"]}
+    if body.geo_keys:
+        cities, regions = [], []
+        for k in body.geo_keys:
+            if str(k).isdigit():
+                cities.append({"key": k, "radius": 25, "distance_unit": "kilometer"})
+            else:
+                regions.append({"key": k})
+        geo = {}
+        if cities:
+            geo["cities"] = cities
+        if regions:
+            geo["regions"] = regions
+        if not geo:
+            geo = {"countries": body.geo_countries or ["IT"]}
+    targeting = {
+        "geo_locations": geo,
+        "age_min": max(13, body.eta_min), "age_max": min(65, body.eta_max),
+        "publisher_platforms": body.piattaforme or ["facebook", "instagram"],
+        "targeting_automation": {"advantage_audience": 0}}
+    if genders:
+        targeting["genders"] = genders
+    adset_data = {
+        "name": f"{name} — Ad set", "campaign_id": campaign_id,
+        "daily_budget": int(round(body.budget_giornaliero_eur * 100)),
+        "billing_event": "IMPRESSIONS",
+        "bid_strategy": "LOWEST_COST_WITHOUT_CAP",
+        "optimization_goal": "LEAD_GENERATION" if is_lead else "CONVERSATIONS",
+        "destination_type": "ON_AD" if is_lead else "WHATSAPP",
+        "promoted_object": json.dumps({"page_id": META_PAGE_ID}),
+        "targeting": json.dumps(targeting), "status": "PAUSED"}
+    if body.start_time:
+        adset_data["start_time"] = body.start_time
+    if body.end_time:
+        adset_data["end_time"] = body.end_time
+    adset = await graph_post(f"/{acct}/adsets", adset_data)
+    adset_id = adset["id"]
+
+    if is_lead:
+        if not body.lead_form_id:
+            raise HTTPException(400, "Seleziona un modulo lead per la destinazione Modulo.")
+        cta = {"type": "SIGN_UP", "value": {"link": "https://fb.me/",
+                                            "lead_gen_form_id": body.lead_form_id}}
+    else:
+        cta = {"type": "WHATSAPP_MESSAGE", "value": {"app_destination": "WHATSAPP"}}
+
+    story: dict = {"page_id": META_PAGE_ID}
+    if body.video_id:
+        await _wait_video_ready(body.video_id)
+        story["video_data"] = {"video_id": body.video_id, "message": body.messaggio,
+                               "call_to_action": cta}
+    else:
+        story["link_data"] = {"image_hash": body.image_hash, "link": body.link,
+                              "message": body.messaggio, "call_to_action": cta}
+
+    creative_base = {"name": f"{name} — Creatività",
+                     "object_story_spec": json.dumps(story)}
+    try:
+        creative = await graph_post(f"/{acct}/adcreatives", {
+            **creative_base,
+            "degrees_of_freedom_spec": json.dumps({"creative_features_spec": {
+                "adapt_to_placement": {"enroll_status": "OPT_IN"}}})})
+    except HTTPException as e:
+        logger.warning(f"creative con adapt_to_placement fallita, riprovo base: {e.detail}")
+        creative = await graph_post(f"/{acct}/adcreatives", creative_base)
+    creative_id = creative["id"]
+
+    ad = await graph_post(f"/{acct}/ads", {
+        "name": f"{name} — Ad", "adset_id": adset_id,
+        "creative": json.dumps({"creative_id": creative_id}), "status": "PAUSED"})
+
+    doc = {"id": str(uuid.uuid4()), "campaign_id": campaign_id, "adset_id": adset_id,
+           "creative_id": creative_id, "ad_id": ad["id"], "nome": name,
+           "destinazione": body.destinazione, "status": "PAUSED",
+           "thumb_url": body.thumb_url, "created_at": iso(now_utc())}
+    await db.meta_campaigns.insert_one(doc)
+    await ensure_campaign(name, None, None)
+    return {k: v for k, v in doc.items() if k != "_id"}
+
+
+@api.get("/meta/campaigns/created")
+async def meta_list_created(user: dict = Depends(require_admin)):
+    return await db.meta_campaigns.find({}, {"_id": 0}).sort("created_at", -1).to_list(100)
+
+
+PREVIEW_FORMATS = [
+    ("MOBILE_FEED_STANDARD", "Feed"),
+    ("INSTAGRAM_STANDARD", "Instagram Feed"),
+    ("INSTAGRAM_STORY", "Instagram Story"),
+    ("INSTAGRAM_REELS", "Reels"),
+]
+
+
+@api.get("/meta/preview/{creative_id}")
+async def meta_preview(creative_id: str, user: dict = Depends(require_admin)):
+    """Anteprime reali renderizzate da Meta per i vari formati (QC senza caricare altro)."""
+    out = []
+    for fmt, label in PREVIEW_FORMATS:
+        try:
+            res = await graph_get2(f"{creative_id}/previews", {"ad_format": fmt})
+            body = (res.get("data") or [{}])[0].get("body", "")
+            m = re.search(r'src="([^"]+)"', body or "")
+            src = m.group(1).replace("&amp;", "&") if m else None
+            if src:
+                out.append({"format": fmt, "label": label, "url": src})
+        except Exception as e:  # noqa
+            logger.warning(f"preview {fmt} failed: {e}")
+    return {"previews": out}
+
 
 
 # ---------------------------------------------------------------------------

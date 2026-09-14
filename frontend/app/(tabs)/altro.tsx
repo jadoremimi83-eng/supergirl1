@@ -12,6 +12,7 @@ const ITEMS = [
   { key: "servizi", label: "Servizi", desc: "Trattamenti, prezzi, promozioni, FAQ", icon: "star", route: "/altro/servizi" },
   { key: "sedi", label: "Sedi", desc: "Indirizzi, telefoni, orari", icon: "map-pin", route: "/altro/sedi" },
   { key: "campagne", label: "Campagne", desc: "Campagne Meta e lead collegati", icon: "target", route: "/altro/campagne" },
+  { key: "crea-campagna", label: "Crea Campagna Meta", desc: "Crea sponsorizzate SG- da una foto o video", icon: "plus-circle", route: "/altro/crea-campagna", admin: true },
   { key: "chiamate-corsi", label: "Chiamate Corsi", desc: "Chiamate corso fissate da Andrea", icon: "phone-call", route: "/altro/chiamate-corsi" },
   { key: "prezzi-corsi", label: "Prezzi Corsi", desc: "Listino interno corsi (non comunicato in automatico)", icon: "tag", route: "/altro/prezzi-corsi", admin: true },
   { key: "team", label: "Team", desc: "Utenti e ruoli", icon: "users", route: "/altro/team" },
