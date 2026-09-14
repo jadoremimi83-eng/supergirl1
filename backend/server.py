@@ -255,7 +255,7 @@ ANGER_KEYWORDS = ["arrabbiat", "vergogna", "truffa", "denuncia", "pessim", "inac
 
 # Domande di qualificazione (una alla volta, tono WhatsApp, breve)
 AI_QUALIFY_STEPS = [
-    "Perfetto! Per aiutarti al meglio, posso chiederti qual è l'obiettivo principale che vorresti raggiungere? 😊",
+    "Perfetto! Per aiutarti al meglio, posso chiederti qual è l'obiettivo principale che vorresti raggiungere?",
     "Capisco benissimo. C'è una zona in particolare su cui vorresti lavorare?",
     "Ottimo. Preferisci la nostra sede di Milano Centro o quella di Roma Prati?",
     "Grazie mille! Hai già avuto esperienze con trattamenti simili in passato?",
@@ -1226,7 +1226,7 @@ async def ingest_meta_lead(data: dict) -> dict:
         image_rel = None  # per i corsi niente foto trattamento
     else:
         greeting = (
-            f"Ciao {nome}, sono {ASSISTANT_NAME} di {BRAND_NAME} 😊\n"
+            f"Ciao {nome}, sono {ASSISTANT_NAME} di {BRAND_NAME}.\n"
             f"Ho visto che ti interessa il trattamento {servizio or 'estetico'}. "
             f"Dimmi, qual è la cosa che vorresti migliorare? Così ti spiego come "
             f"possiamo aiutarti."
@@ -1996,7 +1996,7 @@ async def build_corso_system_prompt(lead: dict) -> str:
         f"REGOLA ANTI-INVENZIONE: usa SOLO le informazioni della KNOWLEDGE BASE qui sotto. Se non sai "
         f"qualcosa rispondi SOLO con il token [[RICHIAMO]]; se è un tema medico/delicato usa SOLO "
         f"[[RICHIAMO_MEDICO]].\n"
-        f"REGOLA EMOJI: vietato qualsiasi cuore; altre emoji solo di rado.\n"
+        f"REGOLA EMOJI: VIETATO usare qualsiasi emoji o emoticon (nessun cuore, nessuna faccina), MAI.\n"
         f"{prezzi_rule}\n"
         f"CONTESTO LEAD: nome={lead.get('nome')}, corso d'interesse={corso_nome}, "
         f"sede/zona={lead.get('sede') or 'NON INDICATA'}, campagna={lead.get('campagna')}.\n\n"
@@ -2049,8 +2049,8 @@ async def build_ai_system_prompt(lead: dict) -> str:
         f"STILE NATURALE (fondamentale — devi sembrare una persona vera, un'estetista/consulente donna "
         f"che lavora da anni con clienti e ha confidenza nel consigliare): tono caldo, confidenziale e "
         f"professionale ma MAI formale, freddo, perfettino o robotico.\n"
-        f"REGOLA EMOJI: VIETATO usare qualsiasi cuore (❤️ 💕 💛 🩷 💗 💖 ecc.), MAI, in nessun messaggio. "
-        f"Altre emoji (es. 😊) solo di rado, una ogni tanto e solo quando risulta naturale — NON in ogni "
+        f"REGOLA EMOJI: VIETATO usare qualsiasi emoji o emoticon (nessun cuore, nessuna faccina), MAI, in nessun messaggio. "
+        f"Scrivi sempre in testo semplice, senza alcun simbolo grafico. "
         f"messaggio, mai sequenze o doppie emoji.\n"
         f"APERTURE VARIE: è VIETATO iniziare in modo automatico con 'Certo', 'Certamente', 'Perfetto', "
         f"'Assolutamente'. Puoi usarle RARAMENTE ma non come formula fissa. Varia molto l'inizio: a volte "
@@ -2073,7 +2073,7 @@ async def build_ai_system_prompt(lead: dict) -> str:
         f"NON copiarli alla lettera, servono solo a farti capire lo stile): "
         f"1) 'Sì, guarda, è proprio uno dei motivi per cui lo facciamo tanto. Lavora bene sulla cellulite e "
         f"sulla compattezza della pelle. Poi dipende da come parti tu, perché ogni corpo risponde diversamente.' "
-        f"2) 'Sì 😊 soprattutto se il problema è cellulite e pelle poco compatta. In quel caso è uno dei "
+        f"2) 'Sì, soprattutto se il problema è cellulite e pelle poco compatta. In quel caso è uno dei "
         f"trattamenti che valuterei.'\n"
         f"Non rivelare mai di essere un assistente automatico o un'AI.\n"
         f"{prezzo_rule}"
@@ -2109,22 +2109,33 @@ async def build_ai_system_prompt(lead: dict) -> str:
 import re
 
 HEART_RE = re.compile(
-    "[" 
-    "\u2764\u2665\u2763"           # ❤ ♥ ❣
-    "\U0001F495-\U0001F49F"        # 💕💖💗💘💙💚💛💜💝💞💟
-    "\U0001F493\U0001F494"         # 💓 💔
-    "\U0001FA75-\U0001FA77"        # 🩵 🩶 🩷
-    "\U0001F9E1\U0001F5A4\U0001F90D\U0001F90E"  # 🧡 🖤 🤍 🤎
+    "["
+    "\u2764\u2665\u2763"
+    "\U0001F495-\U0001F49F"
+    "\U0001F493\U0001F494"
+    "\U0001FA75-\U0001FA77"
+    "\U0001F9E1\U0001F5A4\U0001F90D\U0001F90E"
     "]\ufe0f?"
+)
+
+# Rimozione COMPLETA di emoji/emoticon dai messaggi di Andrea (regola non negoziabile)
+EMOJI_RE = re.compile(
+    "["
+    "\U0001F300-\U0001FAFF"   # simboli & pittogrammi, emoticon, oggetti, ecc.
+    "\U00002600-\U000027BF"   # simboli vari & dingbats (☀ ✨ ❤ ✅ …)
+    "\U0001F1E6-\U0001F1FF"   # bandiere
+    "\U00002190-\U000021FF"   # frecce
+    "\U00002B00-\U00002BFF"   # simboli vari
+    "\uFE0F\u200D\u20E3"      # variation selector, ZWJ, keycap
+    "]"
 )
 
 
 def strip_hearts(text: str) -> str:
-    """Garanzia hard: rimuove qualsiasi cuore dalle risposte AI (regola non negoziabile)."""
+    """Rimuove QUALSIASI emoji/emoticon dalle risposte AI (nessun cuore, nessuna emoji)."""
     if not text:
         return text
-    cleaned = HEART_RE.sub("", text)
-    # ripulisci eventuali doppi spazi lasciati dalla rimozione
+    cleaned = EMOJI_RE.sub("", HEART_RE.sub("", text))
     return re.sub(r"[ \t]{2,}", " ", cleaned).strip()
 
 
@@ -2160,7 +2171,7 @@ async def ai_generate_reply(conv: dict, lead: dict) -> str:
         f"Conversazione WhatsApp finora:\n{transcript}\n\n"
         f"Scrivi SOLO il prossimo messaggio di {ASSISTANT_NAME} alla cliente. "
         f"Rispetta lo STILE NATURALE: varia l'apertura (NON iniziare sempre con Certo/Perfetto/"
-        f"Assolutamente), niente cuori, emoji solo di rado. Se la domanda è semplice rispondi breve; "
+        f"Assolutamente), senza alcuna emoji o emoticon. Se la domanda è semplice rispondi breve; "
         f"fai al massimo UNA domanda e non sempre; non ripetere cose già dette. "
         f"Se non hai un'informazione certa nella Knowledge Base usa il token [[RICHIAMO]]; "
         f"se è un tema medico/delicato usa il token [[RICHIAMO_MEDICO]] (non inventare mai)."
@@ -2451,7 +2462,7 @@ async def ai_answer_from_scheda(conv: dict, lead: dict) -> str:
         scheda = "Nessuna scheda disponibile per questo trattamento."
     system = (
         f"Sei {ASSISTANT_NAME} di {BRAND_NAME}, assistente su WhatsApp. Rispondi in italiano, "
-        f"tono caldo e naturale, messaggio BREVE (stile WhatsApp), una sola risposta, niente cuori.\n"
+        f"tono caldo e naturale, messaggio BREVE (stile WhatsApp), una sola risposta, senza alcuna emoji.\n"
         f"REGOLA ANTI-INVENZIONE (FONDAMENTALE): rispondi USANDO SOLO le informazioni nella SCHEDA "
         f"TRATTAMENTO e nelle INFO GENERALI qui sotto. Se la risposta NON è presente in queste "
         f"informazioni, NON inventare e NON tirare a indovinare: rispondi ESATTAMENTE e SOLO con il "
@@ -2705,6 +2716,7 @@ WA_ENV = {
     "app_secret": os.environ.get("WHATSAPP_APP_SECRET", "REPLACE_ME"),
     "verify_token": os.environ.get("WHATSAPP_VERIFY_TOKEN", ""),
     "template_name": os.environ.get("WHATSAPP_TEMPLATE_NAME", "nuovo_lead_foto"),
+    "template_name_preferred": os.environ.get("WHATSAPP_TEMPLATE_PREFERRED", "sg_lead_modulo_promo"),
     "template_language": os.environ.get("WHATSAPP_TEMPLATE_LANGUAGE", "it"),
     "numero": "",
 }
@@ -2780,23 +2792,50 @@ async def whatsapp_send_buttons(to: str, body: str, buttons: list):
     return r.json() if not r.is_error else {"error": r.text}
 
 
+_TPL_CACHE = {"ts": 0.0, "approved": set()}
+
+
+async def approved_template_names() -> set:
+    import time
+    if time.time() - _TPL_CACHE["ts"] < 600 and _TPL_CACHE["approved"]:
+        return _TPL_CACHE["approved"]
+    cfg = await get_wa_config()
+    names = set()
+    try:
+        async with httpx.AsyncClient(timeout=20) as c:
+            r = await c.get(f"https://graph.facebook.com/{META_API_VERSION}/{cfg.get('waba_id')}/message_templates",
+                            params={"fields": "name,status", "limit": 200, "access_token": cfg.get("token")})
+        for tm in r.json().get("data", []):
+            if tm.get("status") == "APPROVED":
+                names.add(tm.get("name"))
+    except Exception as e:  # noqa
+        logger.warning(f"approved_template_names: {e}")
+    _TPL_CACHE["ts"] = time.time(); _TPL_CACHE["approved"] = names
+    return names
+
+
 async def whatsapp_send_template(to: str, nome: str, servizio: str, image_link: Optional[str]):
     cfg = await get_wa_config()
     if not wa_is_configured(cfg) or not to:
         return {"skipped": True}
+    # Sceglie il template preferito (nuovo) se APPROVATO, altrimenti il fallback attuale.
+    preferred = cfg.get("template_name_preferred")
+    tpl_name = cfg.get("template_name")
+    body_params = [{"type": "text", "text": nome}, {"type": "text", "text": servizio or ""}]
+    if preferred and preferred in await approved_template_names():
+        tpl_name = preferred
+        body_params = [{"type": "text", "text": servizio or "che hai richiesto"}]  # solo {{1}} = trattamento
     components = []
     if image_link:
         if image_link.startswith("/"):
-            base = (os.environ.get("PUBLIC_BASE_URL") or "").rstrip("/")
+            base = (os.environ.get("PUBLIC_BASE_URL") or os.environ.get("EXPO_PUBLIC_BACKEND_URL") or "").rstrip("/")
             image_link = f"{base}{image_link}" if base else image_link
         components.append({"type": "header", "parameters": [
             {"type": "image", "image": {"link": image_link}}]})
-    components.append({"type": "body", "parameters": [
-        {"type": "text", "text": nome},
-        {"type": "text", "text": servizio}]})
+    components.append({"type": "body", "parameters": body_params})
     payload = {"messaging_product": "whatsapp", "recipient_type": "individual",
                "to": to, "type": "template",
-               "template": {"name": cfg["template_name"],
+               "template": {"name": tpl_name,
                             "language": {"code": cfg["template_language"]},
                             "components": components}}
     url = f"https://graph.facebook.com/{META_API_VERSION}/{cfg['phone_number_id']}/messages"
@@ -2825,7 +2864,7 @@ DEFAULT_FOLLOWUP_RULES = {
     # Testi alternativi selezionabili dal pannello
     "message_options": [
         "Ciao {nome}, sono Andrea di J'adore Mimì. Posso aiutarti a scegliere il trattamento giusto per te?",
-        "Ciao {nome}, hai ancora qualche dubbio? Scrivimi pure, ti rispondo subito io 😊",
+        "Ciao {nome}, hai ancora qualche dubbio? Scrivimi pure, ti rispondo subito io.",
         "Ciao {nome}, vuoi che ti spieghi meglio come possiamo aiutarti con il tuo obiettivo?",
     ],
 }
