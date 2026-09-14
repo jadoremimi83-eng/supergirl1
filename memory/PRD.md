@@ -176,3 +176,17 @@ admin@supergirl.app / Admin123! · operatore@supergirl.app / Operatore123!
 - Testato: curl (medico→[[RICHIAMO_MEDICO]], info non-KB→[[RICHIAMO]], normale→risposta commerciale) + screenshot desktop autenticato (flusso completo con nota di handoff). Nessun testing_agent, nessun deploy (crediti).
 - SOLO codice → per la produzione servirà un redeploy quando l'utente lo richiederà. PROSSIMO (in attesa approvazione utente): Modulo B (Corsi vs Trattamenti), C (Meta Campaign Creator), D (asset resizing).
 
+
+## Modulo B — Corsi vs Trattamenti + prenotazione chiamate corso (2026-06)
+- **Distinzione ESPLICITA** (non basata sul nome): campo `tipo` = "corso" | "trattamento" su CAMPAGNE e LEAD (default trattamento). Il lead eredita il tipo dalla campagna all'ingestione (ingest_meta_lead + create_inbound_lead). Modificabile: toggle Corso/Trattamento nella schermata Campagne (`PATCH /api/campaigns/{id}`) e nella Scheda Cliente (`PATCH /api/leads/{id}` con tipo).
+- **Trattamenti**: comportamento invariato (Andrea chat → handoff "Da richiamare"/attesa_chiamata, niente appuntamenti).
+- **Corsi**: Andrea = **Academy Manager** (`build_corso_system_prompt`). Qualifica, propone una chiamata, chiede giorno/ora (NON mostra slot prefissati). Prezzi corsi NON comunicati al primo messaggio.
+- **Motore prenotazione chiamate** (Mar–Sab 09:00–18:00, slot 30 min, niente sovrapposizioni): `next_window_start`, `slot_is_free`, `find_nearest_free_slot` (se occupato → primo libero più vicino; salta Dom/Lun e fuori orario). Estrazione giorno/ora dal linguaggio naturale via LLM (`extract_call_datetime`, fuso Europe/Rome). Flusso: preferenza → proposta slot (conv.corso_proposed_slot) → conferma cliente (`is_confirmation`) → `finalize_course_call`: crea `call_slots` (status fissata), lead → **chiamata_corso_fissata**, stop follow-up, notifica + push.
+- **Reminder 1h prima**: `call_reminder_worker` (loop 60s) → notifica in-app + push allo staff, flag `reminded`. Avviato in startup.
+- **Nuovo stato pipeline** `chiamata_corso_fissata` (PIPELINE_STAGES + theme STAGES).
+- **Endpoint nuovi**: `GET/PATCH /api/call-slots`, `GET/PATCH /api/course-prices` (admin), `PATCH /api/campaigns/{id}` (tipo).
+- **Frontend**: schermata `/altro/chiamate-corsi` (lista chiamate fissate, banner "imminente" 1h, orari SEMPRE Europe/Rome via Intl, azioni completata/annulla/chat) + `/altro/prezzi-corsi` (listino interno admin) + link nel menu Altro. Toggle tipo in Campagne e Scheda Cliente. home_priorities: sezione corso ora basata su `tipo`.
+- Integrato su tutti i canali (simulate-ai-turn + handle_inbound_wa WhatsApp reale).
+- Testato via curl: qualifica → proposta (martedì 15:00) → conferma → booked (chiamata_corso_fissata + call_slot creato); overlap→15:30; Dom→Mar 09:00; Ven 19:00→Sab 09:00. Screenshot desktop schermata Chiamate Corsi OK. Nessun deploy/testing_agent (crediti). Serve redeploy per la produzione.
+- PROSSIMO: Fonte Lead nella scheda contatto (provenienza/campagna/sede/WA-Modulo + filtri/ordinamento), poi Modulo C+D (creazione campagne Meta SG- + adattamento immagini con protezione volti/testi/logo).
+

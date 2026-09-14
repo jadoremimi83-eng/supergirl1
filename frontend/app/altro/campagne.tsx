@@ -1,5 +1,5 @@
 import React, { useCallback, useState } from "react";
-import { View, Text, StyleSheet, ScrollView } from "react-native";
+import { View, Text, StyleSheet, ScrollView, Pressable } from "react-native";
 import { useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
@@ -19,6 +19,11 @@ export default function Campagne() {
   }, []);
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
+  const setTipo = async (id: string, tipo: string) => {
+    setItems((prev) => prev.map((c) => (c.id === id ? { ...c, tipo } : c)));
+    try { await api.patch(`/campaigns/${id}`, { tipo }); } catch {}
+  };
+
   return (
     <View style={{ flex: 1, backgroundColor: colors.surface }}>
       <SubHeader title="Campagne Meta" />
@@ -36,6 +41,20 @@ export default function Campagne() {
                   <Text style={styles.leadNum}>{c.lead_count}</Text>
                   <Text style={styles.leadLbl}>lead</Text>
                 </View>
+              </View>
+              <View style={styles.tipoRow}>
+                <Text style={styles.tipoLbl}>TIPO</Text>
+                {["trattamento", "corso"].map((t) => {
+                  const on = (c.tipo || "trattamento") === t;
+                  return (
+                    <Pressable key={t} onPress={() => setTipo(c.id, t)} testID={`campaign-tipo-${c.id}-${t}`}
+                      style={[styles.tipoChip, on && styles.tipoChipOn]}>
+                      <Text style={[styles.tipoChipTxt, on && styles.tipoChipTxtOn]}>
+                        {t === "corso" ? "Corso" : "Trattamento"}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
               </View>
               <Text style={styles.insLabel}>INSERZIONI / CREATIVITÀ</Text>
               {c.inserzioni.map((i: string) => (
@@ -64,4 +83,10 @@ const styles = StyleSheet.create({
   insLabel: { color: colors.onSurfaceTertiary, fontSize: 10, fontWeight: "800", letterSpacing: 1, marginTop: spacing.md, marginBottom: spacing.sm },
   insRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm, paddingVertical: 4 },
   insText: { color: colors.onSurfaceSecondary, fontSize: 13 },
+  tipoRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm, marginTop: spacing.md },
+  tipoLbl: { color: colors.onSurfaceTertiary, fontSize: 10, fontWeight: "800", letterSpacing: 1, marginRight: 2 },
+  tipoChip: { paddingHorizontal: spacing.md, paddingVertical: 6, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface },
+  tipoChipOn: { backgroundColor: colors.brandPrimary, borderColor: colors.brandPrimary },
+  tipoChipTxt: { color: colors.onSurfaceSecondary, fontSize: 12.5, fontWeight: "700" },
+  tipoChipTxtOn: { color: colors.onBrandPrimary },
 });

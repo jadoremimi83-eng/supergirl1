@@ -70,6 +70,7 @@ export const STAGES: Record<string, { label: string; short: string; accent: stri
   attesa_chiamata: { label: "IN ATTESA DI CHIAMATA", short: "Da richiamare", accent: "#E0A94F" },
   da_fissare: { label: "DA FISSARE APPUNTAMENTO", short: "Da fissare", accent: "#D4AF37" },
   appuntamento_fissato: { label: "APPUNTAMENTO FISSATO", short: "Fissato", accent: "#7FC99E" },
+  chiamata_corso_fissata: { label: "CHIAMATA CORSO FISSATA", short: "Chiamata corso", accent: "#C9A0DC" },
   non_interessata: { label: "NON INTERESSATA", short: "Non int.", accent: "#9E9A90" },
   persa: { label: "PERSA / NON RISPONDE", short: "Persa", accent: "#7A6F5E" },
 };

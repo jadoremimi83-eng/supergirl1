@@ -6,6 +6,7 @@ l'implementazione interna senza toccare frontend o schema.
 """
 import os
 import re
+import json
 import uuid
 import hmac
 import hashlib
@@ -114,9 +115,11 @@ PIPELINE_STAGES = [
      "desc": "Il cliente vuole prenotare e deve essere contattato dallo staff."},
     {"key": "appuntamento_fissato", "label": "APPUNTAMENTO FISSATO", "order": 7,
      "desc": "Lo staff ha fissato manualmente l'appuntamento."},
-    {"key": "non_interessata", "label": "NON INTERESSATA", "order": 8,
+    {"key": "chiamata_corso_fissata", "label": "CHIAMATA CORSO FISSATA", "order": 8,
+     "desc": "Chiamata per un corso fissata da Andrea (Academy Manager)."},
+    {"key": "non_interessata", "label": "NON INTERESSATA", "order": 9,
      "desc": "Cliente che dichiara di non essere interessata."},
-    {"key": "persa", "label": "PERSA / NON RISPONDE", "order": 9,
+    {"key": "persa", "label": "PERSA / NON RISPONDE", "order": 10,
      "desc": "Cliente che non risponde dopo i follow-up previsti."},
 ]
 STAGE_LABELS = {s["key"]: s["label"] for s in PIPELINE_STAGES}
@@ -126,6 +129,18 @@ TEMPERATURES = [
     {"key": "interessata", "label": "Interessata"},
     {"key": "da_coltivare", "label": "Da Coltivare"},
     {"key": "non_qualificata", "label": "Non Qualificata"},
+]
+
+# --- Prenotazione chiamate CORSI (Modulo B) ---
+# Finestra chiamate: Martedì(1)–Sabato(5) [lun=0], 09:00–18:00, slot da 30 min.
+CALL_SLOT_MINUTES = 30
+CALL_DAYS = {1, 2, 3, 4, 5}
+CALL_START_HOUR = 9
+CALL_END_HOUR = 18  # ultimo slot che inizia alle 17:30
+CONFIRM_WORDS = [
+    "sì", "si", "va bene", "ok", "okay", "perfetto", "confermo", "confermato",
+    "d'accordo", "daccordo", "certo", "va benissimo", "per me va bene", "ci sono",
+    "andata", "va bene così", "mi va bene", "🆗", "👍",
 ]
 
 
@@ -560,13 +575,33 @@ async def simulate_ai_turn(conv_id: str, user: dict = Depends(current_user)):
         {"conversation_id": conv_id}, {"_id": 0}).sort("created_at", 1).to_list(500)
     last_customer = next((m for m in reversed(msgs) if m["sender"] == "cliente"), None)
 
-    # Rileva handoff
-    if last_customer:
+    is_corso = (lead.get("tipo") or "trattamento") == "corso"
+
+    # Rileva handoff (per i CORSI la prenotazione è gestita dal flusso Academy)
+    if last_customer and not is_corso:
         motivo, ai_message = detect_handoff(last_customer["text"])
         if motivo:
             reply, summary, new_status = await do_handoff(lead, conv, motivo, ai_message)
             return {"message": reply, "handoff": True, "motivo": motivo,
                     "summary": summary, "new_status": new_status}
+
+    # CORSO: gestione prenotazione chiamata (proposta / conferma slot)
+    if is_corso and last_customer:
+        handled, corso_reply, booked = await handle_corso_turn(conv, lead, last_customer["text"])
+        if handled:
+            cmsg = {"id": str(uuid.uuid4()), "conversation_id": conv_id, "sender": "ai",
+                    "text": corso_reply, "type": "text", "created_at": iso(now_utc()),
+                    "read": True}
+            await db.messages.insert_one(cmsg)
+            await db.conversations.update_one({"id": conv_id}, {"$set": {
+                "last_message": corso_reply, "last_message_at": iso(now_utc())}})
+            if not booked:
+                await db.conversations.update_one({"id": conv_id}, {"$set": {"stato": "in_attesa"}})
+                await db.leads.update_one({"id": lead["id"]}, {"$set": {
+                    "stato_pipeline": "in_attesa", "ultimo_contatto": iso(now_utc())}})
+            return {"message": {k: v for k, v in cmsg.items() if k != "_id"},
+                    "handoff": booked, "motivo": "chiamata_corso" if booked else None,
+                    "new_status": "chiamata_corso_fissata" if booked else "in_attesa"}
 
     # Altrimenti: l'AI commerciale reale genera la prossima risposta
     reply_text = await ai_generate_reply(conv, lead)
@@ -674,6 +709,7 @@ class LeadUpdate(BaseModel):
     temperature: Optional[str] = None
     operatore_assegnato: Optional[str] = None
     email: Optional[str] = None
+    tipo: Optional[str] = None  # corso | trattamento
 
 
 @api.patch("/leads/{lead_id}")
@@ -683,6 +719,8 @@ async def update_lead(lead_id: str, body: LeadUpdate,
     if not lead:
         raise HTTPException(404, "Cliente non trovato")
     updates = {k: v for k, v in body.dict().items() if v is not None}
+    if "tipo" in updates and updates["tipo"] not in ("corso", "trattamento"):
+        raise HTTPException(400, "tipo non valido")
     if updates:
         await db.leads.update_one({"id": lead_id}, {"$set": updates})
     return await db.leads.find_one({"id": lead_id}, {"_id": 0})
@@ -762,11 +800,9 @@ async def home_priorities(user: dict = Depends(current_user)):
             "campagna": l.get("campagna"),
             "conversation_id": conv["id"] if conv else None,
         })
-    # Separazione contatti corso (servizio/campagna/annuncio/modulo contiene "corso")
+    # Separazione contatti CORSO in base al tipo esplicito del lead (corso|trattamento)
     def is_corso(l):
-        blob = " ".join(str(l.get(k) or "") for k in
-                        ("servizio", "campagna", "inserzione", "form_name")).lower()
-        return "corso" in blob
+        return (l.get("tipo") or "trattamento") == "corso"
     corso = [o for o, l in zip(out, leads) if is_corso(l)]
     trattamenti = [o for o, l in zip(out, leads) if not is_corso(l)]
     total = await db.leads.count_documents({})
@@ -970,6 +1006,7 @@ async def list_campaigns(user: dict = Depends(current_user)):
     camps = await db.campaigns.find({}, {"_id": 0}).to_list(200)
     for c in camps:
         c["lead_count"] = await db.leads.count_documents({"campagna": c["nome"]})
+        c.setdefault("tipo", "trattamento")
     return camps
 
 
@@ -1123,6 +1160,8 @@ async def ingest_meta_lead(data: dict) -> dict:
     servizio = data.get("servizio")
 
     await ensure_campaign(campagna, inserzione, servizio)
+    camp_doc = await db.campaigns.find_one({"nome": campagna}, {"_id": 0}) if campagna else None
+    tipo = (camp_doc or {}).get("tipo") or "trattamento"
 
     lead = {
         "id": lid, "nome": nome, "cognome": cognome,
@@ -1137,7 +1176,7 @@ async def ingest_meta_lead(data: dict) -> dict:
         "stato_pipeline": "nuovo_lead", "temperature": "da_coltivare",
         "operatore_assegnato": None, "esigenza": "", "obiezioni": "",
         "note_staff": "", "ai_summary": None, "handoff_at": None,
-        "leadgen_id": leadgen_id, "origine": "meta",
+        "leadgen_id": leadgen_id, "origine": "meta", "tipo": tipo,
         "form_id": data.get("form_id"), "form_name": data.get("form_name"),
     }
     await db.leads.insert_one(lead)
@@ -1145,12 +1184,20 @@ async def ingest_meta_lead(data: dict) -> dict:
     svc_doc = await db.services.find_one({"nome": servizio}, {"_id": 0}) if servizio else None
     image_rel = (svc_doc or {}).get("immagine")
 
-    greeting = (
-        f"Ciao {nome}, sono {ASSISTANT_NAME} di {BRAND_NAME} 😊\n"
-        f"Ho visto che ti interessa il trattamento {servizio or 'estetico'}. "
-        f"Dimmi, qual è la cosa che vorresti migliorare? Così ti spiego come "
-        f"possiamo aiutarti."
-    )
+    if tipo == "corso":
+        greeting = (
+            f"Ciao {nome}, sono {ASSISTANT_NAME}, l'Academy Manager di {BRAND_NAME}.\n"
+            f"Ho visto che ti interessa il nostro corso {servizio or ''}. "
+            f"Posso farti due domande veloci per capire come aiutarti al meglio?"
+        )
+        image_rel = None  # per i corsi niente foto trattamento
+    else:
+        greeting = (
+            f"Ciao {nome}, sono {ASSISTANT_NAME} di {BRAND_NAME} 😊\n"
+            f"Ho visto che ti interessa il trattamento {servizio or 'estetico'}. "
+            f"Dimmi, qual è la cosa che vorresti migliorare? Così ti spiego come "
+            f"possiamo aiutarti."
+        )
     await db.conversations.insert_one({
         "id": cid, "lead_id": lid, "ai_attiva": True, "stato": "nuovo_lead",
         "unread": 0, "operatore": None, "last_message": greeting,
@@ -1426,7 +1473,53 @@ async def meta_simulate(body: SimLeadInput, user: dict = Depends(require_admin))
 # ---------------------------------------------------------------------------
 # AI REALE (GPT-5.4 via Emergent) — assistente commerciale J'adore Mimì
 # ---------------------------------------------------------------------------
+async def get_corso_config() -> dict:
+    return await db.integration_config.find_one({"key": "corsi"}, {"_id": 0}) or {}
+
+
+async def build_corso_system_prompt(lead: dict) -> str:
+    """Prompt Academy Manager per i lead di tipo CORSO."""
+    kb = await db.knowledge_base.find_one({}, {"_id": 0}) or {}
+    corso = await get_corso_config()
+    prezzi = (corso.get("prezzi") or "").strip()
+    corso_nome = lead.get("servizio") or "corso"
+    prezzi_rule = (
+        f"PREZZI CORSI (uso interno): {prezzi}\n"
+        f"REGOLA PREZZI: NON comunicare MAI i prezzi nel primo messaggio e non anticiparli tu. "
+        f"Se la cliente li chiede esplicitamente puoi indicarli con i valori ESATTI qui sopra "
+        f"(mai inventare), ma riporta sempre il discorso al fissare la chiamata per spiegarle tutto "
+        f"con calma. Se non hai i prezzi nel sistema, di' che li vede insieme in chiamata.\n"
+        if prezzi else
+        f"PREZZI CORSI: non hai prezzi nel sistema. NON inventare cifre: di' che vedete tutto "
+        f"insieme in chiamata.\n")
+    return (
+        f"Sei {ASSISTANT_NAME}, l'Academy Manager di {BRAND_NAME}. Ti occupi dei CORSI di formazione "
+        f"(academy). Parli in italiano, tono caldo, professionale e concreto, stile WhatsApp: messaggi "
+        f"BREVI e naturali, una domanda alla volta. Non rivelare mai di essere un assistente automatico.\n\n"
+        f"OBIETTIVO: qualificare la persona interessata al corso e PORTARLA A FISSARE UNA CHIAMATA "
+        f"conoscitiva con l'academy. NON vendi il corso in chat: spieghi l'essenziale e proponi la chiamata.\n"
+        f"QUALIFICA (in modo naturale, non come questionario): capisci se è del settore/estetista o "
+        f"principiante, cosa la interessa del corso ({corso_nome}), la sua città/zona.\n"
+        f"FISSARE LA CHIAMATA: NON mostrare MAI slot o orari prefissati e NON far credere di avere "
+        f"un'agenda con orari liberi. Chiedi tu alla persona QUANDO preferisce essere richiamata "
+        f"(giorno e fascia oraria). Le chiamate sono possibili da martedì a sabato, dalle 9 alle 18. "
+        f"Quando ti dà una preferenza, il sistema fisserà lo slot: tu limitati a chiedere la preferenza "
+        f"e a confermare con entusiasmo. Non proporre orari specifici di tua iniziativa.\n"
+        f"REGOLA ANTI-INVENZIONE: usa SOLO le informazioni della KNOWLEDGE BASE qui sotto. Se non sai "
+        f"qualcosa rispondi SOLO con il token [[RICHIAMO]]; se è un tema medico/delicato usa SOLO "
+        f"[[RICHIAMO_MEDICO]].\n"
+        f"REGOLA EMOJI: vietato qualsiasi cuore; altre emoji solo di rado.\n"
+        f"{prezzi_rule}\n"
+        f"CONTESTO LEAD: nome={lead.get('nome')}, corso d'interesse={corso_nome}, "
+        f"sede/zona={lead.get('sede') or 'NON INDICATA'}, campagna={lead.get('campagna')}.\n\n"
+        f"KNOWLEDGE BASE:\nAzienda: {kb.get('azienda','')}\nCorsi/Servizi: {kb.get('servizi','')}\n"
+        f"Sedi: {kb.get('sedi','')}\nFAQ: {kb.get('faq','')}\nObiezioni: {kb.get('obiezioni','')}\n"
+    )
+
+
 async def build_ai_system_prompt(lead: dict) -> str:
+    if (lead.get("tipo") or "trattamento") == "corso":
+        return await build_corso_system_prompt(lead)
     kb = await db.knowledge_base.find_one({}, {"_id": 0}) or {}
     servizio = lead.get("servizio") or "trattamento estetico"
     svc = await db.services.find_one({"nome": servizio}, {"_id": 0}) or {}
@@ -1638,6 +1731,269 @@ async def kb_test(body: KbTestInput, user: dict = Depends(require_admin)):
         return {"reply": reply}
     except Exception as e:  # noqa
         return {"reply": "", "error": str(e)[:200]}
+
+
+# ---------------------------------------------------------------------------
+# MODULO B — Prenotazione chiamate CORSI (Academy Manager)
+# ---------------------------------------------------------------------------
+def _ceil_30(dt_local: datetime) -> datetime:
+    """Arrotonda al prossimo slot da 30 minuti (in avanti)."""
+    dt = dt_local.replace(second=0, microsecond=0)
+    if dt.minute == 0 or dt.minute == 30:
+        return dt
+    if dt.minute < 30:
+        return dt.replace(minute=30)
+    return (dt + timedelta(hours=1)).replace(minute=0)
+
+
+def next_window_start(dt_local: datetime) -> datetime:
+    """Primo inizio-slot valido (Mar–Sab, 09:00–18:00, griglia 30 min) >= dt_local."""
+    dt = _ceil_30(dt_local)
+    for _ in range(0, 14 * 48):
+        if dt.weekday() in CALL_DAYS and CALL_START_HOUR <= dt.hour < CALL_END_HOUR:
+            return dt
+        if dt.weekday() not in CALL_DAYS or dt.hour >= CALL_END_HOUR:
+            dt = (dt + timedelta(days=1)).replace(
+                hour=CALL_START_HOUR, minute=0, second=0, microsecond=0)
+        else:  # troppo presto nello stesso giorno valido
+            dt = dt.replace(hour=CALL_START_HOUR, minute=0, second=0, microsecond=0)
+    return dt
+
+
+async def slot_is_free(start_utc: datetime) -> bool:
+    end_utc = start_utc + timedelta(minutes=CALL_SLOT_MINUTES)
+    taken = await db.call_slots.find(
+        {"status": "fissata"}, {"_id": 0, "start": 1, "end": 1}).to_list(500)
+    for s in taken:
+        try:
+            ss = datetime.fromisoformat(s["start"])
+            se = datetime.fromisoformat(s["end"])
+        except Exception:
+            continue
+        if start_utc < se and ss < end_utc:  # overlap
+            return False
+    return True
+
+
+async def find_nearest_free_slot(preferred_local: datetime):
+    """Ritorna (slot_local, exact_bool) o (None, False) se niente entro ~2 settimane."""
+    requested = next_window_start(preferred_local)
+    cur = requested
+    for _ in range(0, 14 * 20):
+        start_utc = cur.astimezone(timezone.utc)
+        if await slot_is_free(start_utc):
+            return cur, (cur == requested)
+        cur = next_window_start(cur + timedelta(minutes=CALL_SLOT_MINUTES))
+    return None, False
+
+
+def is_confirmation(text: str) -> bool:
+    low = (text or "").strip().lower()
+    if not low:
+        return False
+    return any(w in low for w in CONFIRM_WORDS)
+
+
+async def extract_call_datetime(text: str):
+    """Usa l'LLM per estrarre giorno+ora preferiti dal messaggio della cliente.
+    Ritorna un datetime aware (Rome) oppure None."""
+    now_local = now_utc().astimezone(ROME_TZ)
+    system = (
+        "Estrai da un messaggio (italiano) la preferenza di giorno e ora per una CHIAMATA. "
+        "Rispondi SOLO con JSON valido, nessun altro testo. Formato: "
+        '{"datetime": "YYYY-MM-DDTHH:MM"} oppure {"datetime": null}. '
+        f"Adesso è {now_local.strftime('%Y-%m-%d %H:%M')} ({now_local.strftime('%A')}). "
+        "Interpreta 'domani', 'dopodomani', i giorni della settimana e le date relative a questo istante. "
+        "Se indica solo una fascia: mattina=10:00, pomeriggio=15:00, sera=17:00. "
+        "Se manca l'ora ma c'è il giorno, usa 10:00. "
+        "Se NON è indicato alcun giorno/data (solo un orario vago o nessuna preferenza), usa datetime=null."
+    )
+    try:
+        chat = LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f"extract-{uuid.uuid4()}",
+                       system_message=system).with_model(AI_PROVIDER, AI_MODEL)
+        raw = await chat.send_message(UserMessage(text=text or ""))
+        raw = (raw or "").strip()
+        mobj = re.search(r"\{.*\}", raw, re.DOTALL)
+        if not mobj:
+            return None
+        data = json.loads(mobj.group(0))
+        val = data.get("datetime")
+        if not val:
+            return None
+        dt = datetime.fromisoformat(val)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=ROME_TZ)
+        return dt.astimezone(ROME_TZ)
+    except Exception as e:  # noqa
+        logger.warning(f"extract_call_datetime failed: {e}")
+        return None
+
+
+def _fmt_slot(dt_local: datetime) -> str:
+    giorni = ["lunedì", "martedì", "mercoledì", "giovedì", "venerdì", "sabato", "domenica"]
+    return f"{giorni[dt_local.weekday()]} {dt_local.strftime('%d/%m')} alle {dt_local.strftime('%H:%M')}"
+
+
+async def finalize_course_call(lead: dict, conv: dict, slot_iso: str) -> str:
+    """Fissa definitivamente la chiamata corso e sposta il lead in
+    'chiamata_corso_fissata'. Ritorna il messaggio di conferma naturale."""
+    start_utc = datetime.fromisoformat(slot_iso).astimezone(timezone.utc)
+    end_utc = start_utc + timedelta(minutes=CALL_SLOT_MINUTES)
+    slot_local = start_utc.astimezone(ROME_TZ)
+    await db.call_slots.insert_one({
+        "id": str(uuid.uuid4()), "lead_id": lead["id"], "conversation_id": conv["id"],
+        "nome": lead.get("nome", ""), "cognome": lead.get("cognome", ""),
+        "telefono": lead.get("telefono", ""), "servizio": lead.get("servizio", ""),
+        "sede": lead.get("sede", ""), "start": iso(start_utc), "end": iso(end_utc),
+        "status": "fissata", "reminded": False, "created_at": iso(now_utc()),
+    })
+    from_status = lead["stato_pipeline"]
+    await cancel_followups(lead["id"])
+    await db.leads.update_one({"id": lead["id"]}, {"$set": {
+        "stato_pipeline": "chiamata_corso_fissata", "temperature": "molto_calda",
+        "call_slot_at": iso(start_utc), "handoff_at": iso(now_utc()),
+        "ultimo_contatto": iso(now_utc()),
+    }})
+    await db.conversations.update_one({"id": conv["id"]}, {"$set": {
+        "ai_attiva": False, "stato": "chiamata_corso_fissata",
+        "corso_proposed_slot": None,
+    }})
+    await record_status_change(lead, from_status, "chiamata_corso_fissata", "ai")
+    await create_notification("chiamata_corso", lead,
+                              f"Chiamata corso fissata per {_fmt_slot(slot_local)}")
+    nome = f"{lead['nome']} {lead['cognome']}".strip()
+    await notify_staff_push(
+        "Chiamata corso fissata",
+        f"{nome} · {_fmt_slot(slot_local)}",
+        f"/conversation/{conv['id']}")
+    return (f"Perfetto, allora ti chiamo {_fmt_slot(slot_local)}. "
+            f"Ci sentiamo lì e ti spiego tutto con calma, a presto!")
+
+
+async def handle_corso_turn(conv: dict, lead: dict, text: str):
+    """Gestisce un turno per un lead CORSO.
+    Ritorna (handled, reply_text, booked)."""
+    proposed = conv.get("corso_proposed_slot")
+    # 1) conferma di uno slot proposto
+    if proposed and is_confirmation(text):
+        msg = await finalize_course_call(lead, conv, proposed)
+        return True, msg, True
+    # 2) estrai preferenza giorno/ora
+    dt_pref = await extract_call_datetime(text)
+    if dt_pref:
+        slot_local, exact = await find_nearest_free_slot(dt_pref)
+        if not slot_local:
+            return (True, "Guarda, nei prossimi giorni ho l'agenda piena per le chiamate. "
+                          "Ti va se ti ricontatto io appena si libera uno spazio?", False)
+        await db.conversations.update_one({"id": conv["id"]}, {"$set": {
+            "corso_proposed_slot": iso(slot_local.astimezone(timezone.utc))}})
+        if exact:
+            msg = (f"Benissimo, allora ti chiamo {_fmt_slot(slot_local)}. "
+                   f"Ti confermo? Così blocco lo spazio per te.")
+        else:
+            msg = (f"In quel momento sono già presa, ma il primo spazio libero è "
+                   f"{_fmt_slot(slot_local)}. Ti va bene? Così te lo blocco.")
+        return True, msg, False
+    # 3) nessuna preferenza: lascia rispondere l'AI (qualifica + chiede giorno/ora)
+    return False, None, False
+
+
+# --- Reminder chiamate corso: avviso + push 1 ora prima ---
+async def call_reminder_worker():
+    while True:
+        try:
+            now = now_utc()
+            soon = now + timedelta(minutes=60)
+            due = await db.call_slots.find(
+                {"status": "fissata", "reminded": {"$ne": True},
+                 "start": {"$lte": iso(soon), "$gte": iso(now)}}, {"_id": 0}).to_list(50)
+            for s in due:
+                lead = await db.leads.find_one({"id": s["lead_id"]}, {"_id": 0})
+                if not lead:
+                    continue
+                slot_local = datetime.fromisoformat(s["start"]).astimezone(ROME_TZ)
+                nome = f"{s.get('nome','')} {s.get('cognome','')}".strip()
+                await create_notification(
+                    "promemoria_chiamata_corso", lead,
+                    f"Tra poco: chiamata corso con {nome} alle {slot_local.strftime('%H:%M')}")
+                await notify_staff_push(
+                    "Promemoria chiamata corso",
+                    f"{nome} · oggi alle {slot_local.strftime('%H:%M')}",
+                    f"/conversation/{s.get('conversation_id')}")
+                await db.call_slots.update_one({"id": s["id"]}, {"$set": {"reminded": True}})
+        except Exception as e:  # noqa
+            logger.error(f"call_reminder_worker error: {e}")
+        await asyncio.sleep(60)
+
+
+# --- Endpoints: chiamate corso, prezzi corsi, tipo campagna ---
+@api.get("/call-slots")
+async def list_call_slots(user: dict = Depends(current_user)):
+    slots = await db.call_slots.find(
+        {"status": "fissata"}, {"_id": 0}).sort("start", 1).to_list(200)
+    now = now_utc()
+    out = []
+    for s in slots:
+        try:
+            start = datetime.fromisoformat(s["start"])
+        except Exception:
+            continue
+        mins = (start - now).total_seconds() / 60.0
+        out.append({**s, "starts_in_minutes": round(mins),
+                    "imminent": 0 <= mins <= 60})
+    return out
+
+
+class CallSlotUpdate(BaseModel):
+    status: str  # fissata | annullata | completata
+
+
+@api.patch("/call-slots/{slot_id}")
+async def update_call_slot(slot_id: str, body: CallSlotUpdate,
+                           user: dict = Depends(current_user)):
+    if body.status not in ("fissata", "annullata", "completata"):
+        raise HTTPException(400, "status non valido")
+    slot = await db.call_slots.find_one({"id": slot_id}, {"_id": 0})
+    if not slot:
+        raise HTTPException(404, "Slot non trovato")
+    await db.call_slots.update_one({"id": slot_id}, {"$set": {"status": body.status}})
+    return await db.call_slots.find_one({"id": slot_id}, {"_id": 0})
+
+
+@api.get("/course-prices")
+async def get_course_prices(user: dict = Depends(require_admin)):
+    corso = await get_corso_config()
+    return {"prezzi": corso.get("prezzi", ""), "updated_at": corso.get("updated_at")}
+
+
+class CoursePricesInput(BaseModel):
+    prezzi: str = ""
+
+
+@api.patch("/course-prices")
+async def set_course_prices(body: CoursePricesInput, user: dict = Depends(require_admin)):
+    await db.integration_config.update_one(
+        {"key": "corsi"},
+        {"$set": {"key": "corsi", "prezzi": body.prezzi.strip(),
+                  "updated_at": iso(now_utc())}}, upsert=True)
+    return {"prezzi": body.prezzi.strip()}
+
+
+class CampaignTipoInput(BaseModel):
+    tipo: str  # corso | trattamento
+
+
+@api.patch("/campaigns/{campaign_id}")
+async def update_campaign_tipo(campaign_id: str, body: CampaignTipoInput,
+                               user: dict = Depends(require_admin)):
+    if body.tipo not in ("corso", "trattamento"):
+        raise HTTPException(400, "tipo non valido")
+    camp = await db.campaigns.find_one({"id": campaign_id})
+    if not camp:
+        raise HTTPException(404, "Campagna non trovata")
+    await db.campaigns.update_one({"id": campaign_id}, {"$set": {"tipo": body.tipo}})
+    return await db.campaigns.find_one({"id": campaign_id}, {"_id": 0})
+
 
 
 
@@ -2002,6 +2358,8 @@ async def create_inbound_lead(wa_from: str, value: dict, campagna: str = "WhatsA
         profile_name = (contacts[0].get("profile") or {}).get("name") or ""
     tel = wa_from if wa_from.startswith("+") else "+" + wa_from
     lid = str(uuid.uuid4())
+    camp_doc = await db.campaigns.find_one({"nome": campagna}, {"_id": 0}) if campagna else None
+    tipo = (camp_doc or {}).get("tipo") or "trattamento"
     lead = {
         "id": lid, "nome": profile_name or "Cliente WhatsApp", "cognome": "",
         "telefono": tel, "email": "",
@@ -2013,7 +2371,7 @@ async def create_inbound_lead(wa_from: str, value: dict, campagna: str = "WhatsA
         "stato_pipeline": "ai_conversazione", "temperature": "da_coltivare",
         "operatore_assegnato": None, "esigenza": "", "obiezioni": "",
         "note_staff": "", "ai_summary": None, "handoff_at": None,
-        "leadgen_id": None, "origine": origine,
+        "leadgen_id": None, "origine": origine, "tipo": tipo,
     }
     await db.leads.insert_one(lead)
     cid = str(uuid.uuid4())
@@ -2091,7 +2449,25 @@ async def handle_inbound_wa(m: dict, value: dict):
     await whatsapp_send_typing(m.get("id"))
     loop = asyncio.get_event_loop()
     t0 = loop.time()
-    motivo, ai_msg = detect_handoff(text)
+    is_corso = (lead.get("tipo") or "trattamento") == "corso"
+    # CORSO: proposta/conferma slot chiamata (Academy Manager)
+    if is_corso:
+        handled, corso_reply, booked = await handle_corso_turn(conv, lead, text)
+        if handled:
+            await asyncio.sleep(typing_seconds(corso_reply))
+            await db.messages.insert_one({
+                "id": str(uuid.uuid4()), "conversation_id": conv["id"], "sender": "ai",
+                "text": corso_reply, "type": "text", "created_at": iso(now_utc()), "read": True})
+            await db.conversations.update_one({"id": conv["id"]}, {"$set": {
+                "last_message": corso_reply, "last_message_at": iso(now_utc())}})
+            if not booked:
+                await db.conversations.update_one({"id": conv["id"]}, {"$set": {"stato": "in_attesa"}})
+                await db.leads.update_one({"id": lead["id"]}, {"$set": {
+                    "stato_pipeline": "in_attesa", "ultimo_contatto": iso(now_utc())}})
+            await whatsapp_send_text(wa_from, corso_reply)
+            return
+        # nessuna preferenza rilevata → prosegue con la risposta AI Academy sotto
+    motivo, ai_msg = detect_handoff(text) if not is_corso else (None, None)
     if motivo:
         # attesa proporzionale alla lunghezza del messaggio di handoff
         await asyncio.sleep(typing_seconds(ai_msg))
@@ -2313,6 +2689,7 @@ async def startup():
     from seed_data import seed_database
     await seed_database(db)
     asyncio.create_task(followup_worker())
+    asyncio.create_task(call_reminder_worker())
 
 
 @app.on_event("shutdown")

@@ -58,6 +58,12 @@ export default function Cliente() {
     load();
   };
 
+  const changeTipo = async (tipo: string) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setLead((prev: any) => ({ ...prev, tipo }));
+    await api.patch(`/leads/${id}`, { tipo });
+  };
+
   if (loading || !lead) {
     return (
       <View style={{ flex: 1, backgroundColor: colors.surface, paddingTop: insets.top }}>
@@ -108,6 +114,30 @@ export default function Cliente() {
               <TempBadge temp={lead.temperature} />
             </Pressable>
           </View>
+        </View>
+
+        {/* Tipo lead: Corso vs Trattamento */}
+        <View style={styles.tipoBox}>
+          <Text style={styles.tipoLbl}>TIPO LEAD</Text>
+          <View style={styles.tipoRow}>
+            {["trattamento", "corso"].map((t) => {
+              const on = (lead.tipo || "trattamento") === t;
+              return (
+                <Pressable key={t} onPress={() => changeTipo(t)} testID={`lead-tipo-${t}`}
+                  style={[styles.tipoChip, on && styles.tipoChipOn]}>
+                  <Feather name={t === "corso" ? "award" : "star"} size={13} color={on ? colors.onBrandPrimary : colors.onSurfaceSecondary} />
+                  <Text style={[styles.tipoChipTxt, on && styles.tipoChipTxtOn]}>
+                    {t === "corso" ? "Corso" : "Trattamento"}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+          <Text style={styles.tipoHint}>
+            {(lead.tipo || "trattamento") === "corso"
+              ? "Andrea agisce come Academy Manager: qualifica e fissa la chiamata corso."
+              : "Andrea gestisce la chat e passa il lead allo staff (Da richiamare)."}
+          </Text>
         </View>
 
         {/* Azioni */}
@@ -274,6 +304,14 @@ const styles = StyleSheet.create({
   social: { color: colors.brandSecondary, fontSize: 13, fontWeight: "600" },
   identityBadges: { flexDirection: "row", gap: spacing.sm, marginTop: spacing.sm, flexWrap: "wrap", justifyContent: "center" },
   actions: { flexDirection: "row", gap: spacing.md, marginBottom: spacing.xl },
+  tipoBox: { backgroundColor: colors.surfaceSecondary, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, padding: spacing.lg, marginBottom: spacing.lg },
+  tipoLbl: { color: colors.onSurfaceTertiary, fontSize: 10, fontWeight: "800", letterSpacing: 1, marginBottom: spacing.sm },
+  tipoRow: { flexDirection: "row", gap: spacing.sm },
+  tipoChip: { flexDirection: "row", alignItems: "center", gap: 6, flex: 1, justifyContent: "center", paddingVertical: 10, borderRadius: radius.sm, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface },
+  tipoChipOn: { backgroundColor: colors.brandPrimary, borderColor: colors.brandPrimary },
+  tipoChipTxt: { color: colors.onSurfaceSecondary, fontSize: 13.5, fontWeight: "700" },
+  tipoChipTxtOn: { color: colors.onBrandPrimary },
+  tipoHint: { color: colors.onSurfaceTertiary, fontSize: 12, lineHeight: 17, marginTop: spacing.sm },
   section: {
     backgroundColor: colors.surfaceSecondary,
     borderRadius: radius.md,
