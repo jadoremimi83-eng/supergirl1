@@ -202,6 +202,10 @@ async def seed_database(db):
                       "nuova_chat": True, "nuovo_messaggio": True},
     })
 
+    # Ambiente pulito per la produzione: NON creiamo lead/conversazioni demo.
+    print("[SEED] SUPER GIRL: configurazione iniziale creata (nessun lead demo).")
+    return
+
     # ------------------------------------------------------------------ LEADS
     N = now_utc()
 
